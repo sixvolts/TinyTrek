@@ -1,0 +1,11 @@
+[package]
+name = "client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.93"
+cursive = "0.21.1"
+prost = "0.13.3"
+tinytrek = { path = "../tinytrek" }
+tokio = { version = "1.41.1", features = ["full"] }

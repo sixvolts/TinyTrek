@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package tinytrek;
+
+enum Direction {
+    FORWARD = 0;
+    BACKWARD = 1;
+    LEFT = 2;
+    RIGHT = 3;
+}
+
+message Msg {
+    uint32 steps = 1;
+    Direction direction = 2;
+}
