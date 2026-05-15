@@ -1,0 +1,26 @@
+stages:
+  - setup
+  - build
+
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+  KAS_CONFIG: "ttos.yml"
+  YOCTO_DIR: "build"
+  DL_DIR: "${CI_PROJECT_DIR}/downloads"
+  SSTATE_DIR: "${CI_PROJECT_DIR}/sstate-cache"
+
+cache:
+  paths:
+    - downloads/
+    - sstate-cache/
+
+build-yocto-image:
+  stage: build
+  tags:
+    - yocto
+  script:
+    - mkdir -p ${YOCTO_DIR}
+    - KAS_WORK_DIR=${YOCTO_DIR} kas build ${KAS_CONFIG}
+  artifacts:
+    paths:
+      - ${YOCTO_DIR}/tmp-glibc/deploy/images/

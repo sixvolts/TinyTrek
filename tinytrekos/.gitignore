@@ -1,0 +1,11 @@
+# Temp directories
+.vscode
+build/
+
+# Fetched layers
+poky
+meta-*
+
+# Local layers
+!meta-tt
+

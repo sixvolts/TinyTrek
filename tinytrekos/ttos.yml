@@ -1,0 +1,50 @@
+header:
+  version: 14
+
+machine: tinytrek-hw
+
+distro: ttos
+
+repos:
+  poky:
+    url: git://git.yoctoproject.org/poky
+    commit: scarthgap
+    layers:
+      meta:
+      meta-poky:
+      meta-yocto-bsp:
+
+  meta-openembedded:
+    url: https://git.openembedded.org/meta-openembedded
+    commit: scarthgap
+    layers:
+      meta-networking:
+      meta-oe:
+      meta-python:
+
+  meta-raspberrypi:
+    url: https://github.com/agherzan/meta-raspberrypi.git
+    commit: scarthgap
+
+  meta-lts-mixins:
+    url: https://git.yoctoproject.org/meta-lts-mixins
+    commit: 66ceeebd047d7fdfc8668b300319a76da8ae257d
+
+  meta-ttos:
+    layers:
+      meta-tt:
+
+local_conf_header:
+  base: |
+    CONF_VERSION = "2"
+    IMAGE_FSTYPES += "wic wic.bmap"
+    BB_NUMBER_THREADS = "16"
+    SSTATE_CACHE = "${TOPDIR}/sstate-cache"
+    PARALLEL_MAKE = "-j 8"
+  
+  secrets: |
+    TTOS_WIFI_SSID = "Tinytrek"
+    TTOS_WIFI_PSK = "tucv2024"
+
+target:
+  - ttos-base

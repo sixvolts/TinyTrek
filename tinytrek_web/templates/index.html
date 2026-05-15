@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Movement Control</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            var socket = io.connect({transports: ['websocket']});
+
+	    document.getElementById('powerbuttonon').onclick = function() {
+		socket.emit('power', 'on');
+	    };
+
+ 	    document.getElementById('powerbuttonoff').onclick = function() {
+            	socket.emit('power', 'off');
+            };
+
+            document.addEventListener("keydown", function(event) {
+                let direction = null;
+                switch(event.key) {
+                    case "ArrowUp":
+                        direction = "forward";
+                        break;
+                    case "ArrowDown":
+                        direction = "backward";
+                        break;
+                    case "ArrowLeft":
+                        direction = "left";
+                        break;
+                    case "ArrowRight":
+                        direction = "right";
+                        break;
+                }
+                if (direction) {
+                    socket.emit('move', direction);
+                }
+            });
+        });
+    </script>
+</head>
+<body>
+    <h1>Power Control</h1>
+    <button id="powerbuttonon">Power On</button>
+    <button id="powerbuttonoff">Power Off</button>
+    <h1>Movement Control</h1>
+    <p>Use the arrow keys to move the vehicle.</p>
+    <p id="response"></p>
+</body>
+</html>

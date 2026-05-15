@@ -1,0 +1,13 @@
+[Unit]
+Description=TinyTrek web applications
+After=network.target
+
+[Service]
+ExecStart=python3 /opt/tinytrek/tinytrek.py
+Restart=always
+User=root
+Group=root
+WorkingDirectory=/opt/tinytrek
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=OverlayFS for SSH keys
+DefaultDependencies=no
+Before=sshd.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-overlay-setup.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
