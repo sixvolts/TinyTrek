@@ -47,7 +47,8 @@ tmux new -s ttos
 ```
 
 Output image (`.wic.bz2` / `.wic.bmap`) lands under
-`/yocto/tmp/deploy/images/ttos-ctf-hw/`. Flash with `bmaptool copy`.
+`$TTOS_YOCTO_DIR/tmp-glibc/deploy/images/ttos-ctf-hw/` (poky appends the standard
+`-glibc` `TCLIBCAPPEND` suffix to `TMPDIR`). Flash with `bmaptool copy`.
 
 `TMPDIR`, `SSTATE_DIR`, `DL_DIR` live under the mounted `/yocto` volume, **outside**
 the build tree, so `rm -rf build/` does not nuke sstate/downloads (§6).

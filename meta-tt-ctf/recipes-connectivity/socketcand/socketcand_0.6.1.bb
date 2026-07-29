@@ -29,6 +29,15 @@ inherit autotools-brokensep systemd
 # We are systemd-only; do not generate the SysV init.d script.
 EXTRA_OECONF = "--disable-init-script"
 
+# socketcand 0.6.1 predates two toolchain-era changes:
+#  -DSIOCGSTAMP=0x8906 : glibc >= 2.30 no longer exposes SIOCGSTAMP via
+#      <sys/ioctl.h>; 0x8906 is the asm-generic value used on aarch64 (our target).
+#  -fcommon           : GCC >= 10 defaults to -fno-common, turning the globals this
+#      codebase declares in headers without 'extern' (tv, readfds, ifr, ...) into
+#      "multiple definition" link errors. -fcommon restores the merging behaviour.
+# Configure folds ${CFLAGS} into the Makefile's @CFLAGS@, so these reach compile+link.
+CFLAGS:append = " -DSIOCGSTAMP=0x8906 -fcommon"
+
 # Service shipped but NOT auto-enabled: on a bench build with no CAN HAT it would
 # crash-loop. Enable per deployment (systemctl enable socketcand) once can0/can1 exist.
 SYSTEMD_SERVICE:${PN} = "socketcand.service"
