@@ -1,0 +1,20 @@
+[Unit]
+Description=TTOS CTF first-boot provisioning (§5.6)
+After=local-fs.target
+# Must run before anything that consumes per-car state:
+#  - sshd: so per-car host keys exist before the first SSH connection
+#  - ttos-ap: it Requires= this and reads the rendered hostapd.conf
+Before=sshd.service sshd.socket ssh.service ttos-ap.service systemd-user-sessions.service
+ConditionPathExists=!/etc/ttos/provisioned
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/ttos-provision
+# Reload networkd so an optional per-car static Ethernet drop-in takes effect now.
+ExecStartPost=-/usr/bin/networkctl reload
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

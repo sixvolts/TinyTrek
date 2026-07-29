@@ -1,0 +1,4 @@
+# TTOS CTF: members of 'wheel' may run any command via sudo.
+# The 'ttos' ops user is in 'wheel' (see EXTRA_USERS_PARAMS in the image recipe).
+# root is locked, so sudo is how ops gets privilege on the serial console (§5.5).
+%wheel ALL=(ALL) ALL

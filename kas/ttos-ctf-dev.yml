@@ -1,0 +1,9 @@
+header:
+  version: 14
+  # Bench/dev image. Same layer set as production; only the target image differs
+  # (debug-tweaks, SDK/debug tooling, distinct hostname/banner -- §4.8).
+  includes:
+    - ttos-ctf.yml
+
+target:
+  - ttos-ctf-image-dev

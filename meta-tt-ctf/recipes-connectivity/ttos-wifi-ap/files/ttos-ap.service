@@ -1,0 +1,20 @@
+[Unit]
+Description=TTOS CTF WiFi Access Point (hostapd)
+Wants=network.target
+After=ttos-provision.service sys-subsystem-net-devices-wlan0.device
+Requires=ttos-provision.service
+# Never start unprovisioned: provisioning renders the real hostapd.conf from the
+# template. If provisioning failed/was skipped, the AP stays down (§5.6 fail-loud).
+ConditionPathExists=/etc/hostapd/hostapd.conf
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/ttos-wifi
+ExecStartPre=-/usr/sbin/iw reg set ${TTOS_WIFI_COUNTRY}
+ExecStart=/usr/sbin/hostapd /etc/hostapd/hostapd.conf
+ExecStartPost=/usr/bin/ttos-ap-txpower
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

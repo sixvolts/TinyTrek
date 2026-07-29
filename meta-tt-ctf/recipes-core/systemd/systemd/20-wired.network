@@ -1,0 +1,19 @@
+# Onboard Ethernet -- carries socketcand + control panel, and is the contestant
+# network fallback (real Ethernet + loaner USB dongles, §2/§4.7).
+#
+# Predictable address: DHCP on the hall/dongle network, plus link-local so the
+# interface is ALWAYS reachable even with no DHCP server. First-boot provisioning
+# (§5.6) may drop /etc/systemd/network/20-wired.network.d/10-static.conf to add a
+# fixed per-car Address= where addressing differs per car.
+#
+# Name match covers both the classic (eth0) and predictable (end0) names the RPi4
+# GENET interface can take depending on kernel/udev.
+[Match]
+Name=eth0 end0
+
+[Network]
+DHCP=yes
+LinkLocalAddressing=yes
+
+[DHCPv4]
+RouteMetric=100

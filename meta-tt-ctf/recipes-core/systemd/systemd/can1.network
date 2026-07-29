@@ -1,0 +1,11 @@
+# can1 -- EXTERNAL diagnostic bus. CAN FD: 500 kbit/s arbitration / 1 Mbit/s data (§5.2).
+# Data rate set to 1M (not 2M) per decision: no reason to push the FD bus.
+# FDMode= and DataBitRate= in [CAN] are supported by systemd >= 246; scarthgap ships
+# systemd 255, so systemd-networkd handles this natively (no oneshot fallback needed).
+[Match]
+Name=can1
+
+[CAN]
+BitRate=500000
+DataBitRate=1000000
+FDMode=yes

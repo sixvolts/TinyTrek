@@ -1,0 +1,29 @@
+# Build output — kas checks these out / creates them, never commit.
+/build/
+/downloads/
+/sstate-cache/
+/tmp/
+*.lock
+
+# Upstream layers cloned by kas into the repo root at build time. These are
+# fetched fresh from a clean checkout (kas/ttos-ctf.yml is the source of truth),
+# so they must never be committed.
+/poky/
+/meta-openembedded/
+/meta-raspberrypi/
+/meta-lts-mixins/
+
+# Secrets and per-car provisioning data. NEVER commit (§4.2, §5.5, §5.6).
+# WiFi SSID/PSK, console password hashes, Data IDs, flag codes are provisioning
+# data, not source. Only the *.example templates below are tracked.
+kas/*-secrets.yml
+!kas/*-secrets.yml.example
+*.provision.conf
+!*.provision.conf.example
+ttos-provision.conf
+!ttos-provision.conf.example
+
+# Editor / OS cruft
+*.swp
+*~
+.DS_Store

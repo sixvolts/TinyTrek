@@ -1,0 +1,32 @@
+# TTOS CTF per-car provisioning file (§5.6).
+#
+# HOW TO USE: copy this file onto the FAT boot partition of the SD card as
+#   ttos-provision.conf   (NOT the .example name), edit the values for this car,
+# and boot. It is read ONCE on first boot, then wiped from the FAT partition and
+# moved into the rootfs. Editable from any Windows/macOS/Linux laptop -- no rebuild.
+#
+# Format: KEY=value, one per line. No surrounding quotes needed. '#' comments.
+# CRLF (Windows/mac) line endings are handled automatically.
+#
+# A missing or malformed file makes the car FAIL LOUDLY on the console rather than
+# boot with defaults. Required keys are marked [required].
+
+TTOS_HOSTNAME=ttos-car-03            # [required] per-car hostname
+TTOS_CAR_ID=03                       # [required] short car id
+
+# --- WiFi AP (§5.3) ---
+TTOS_WIFI_SSID=ttos-car-03           # [required] per-car SSID
+TTOS_WIFI_PSK=change-me-8to63chars   # [required] WPA2 passphrase, 8..63 chars
+TTOS_WIFI_COUNTRY=US                 # [required] regulatory domain
+TTOS_WIFI_CHANNEL=149                # [required] NON-DFS 5GHz: 36 40 44 48 149 153 157 161
+TTOS_WIFI_TXPOWER_MBM=500            # optional, mBm (500 = 5 dBm, low power). default 500
+
+# --- Serial ops console credential (§5.5) ---
+# Password HASH ONLY, never plaintext. Generate on any Linux box, e.g.:
+#   openssl passwd -6 'the-long-generated-password'      (sha512crypt, $6$...)
+#   mkpasswd -m yescrypt 'the-long-generated-password'   (yescrypt, $y$...)
+TTOS_CONSOLE_PW_HASH=$6$REPLACE$WITH.A.REAL.HASH.................................
+
+# --- Optional ---
+#TTOS_SSH_AUTHORIZED_KEY=ssh-ed25519 AAAA... dev@laptop   # dev SSH key for the ttos user
+#TTOS_ETH_ADDRESS=192.168.60.13/24                        # per-car static Ethernet address

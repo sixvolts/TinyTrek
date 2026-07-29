@@ -1,0 +1,4 @@
+# /etc/default/ttos-wifi -- written by first-boot provisioning (§5.6).
+# This .example is shipped for reference; the live file is rendered per car.
+TTOS_WIFI_COUNTRY=US
+TTOS_WIFI_TXPOWER_MBM=500

@@ -1,0 +1,31 @@
+# TTOS CTF AP config TEMPLATE (§5.3).
+# Rendered to /etc/hostapd/hostapd.conf by first-boot provisioning (§5.6).
+# __TTOS_*__ placeholders are filled from /boot/ttos-provision.conf.
+# Do NOT put a real SSID/PSK in this file -- it is committed source.
+
+interface=wlan0
+driver=nl80211
+
+ssid=__TTOS_WIFI_SSID__
+
+# Regulatory domain, set explicitly (§5.3).
+country_code=__TTOS_WIFI_COUNTRY__
+ieee80211d=1
+
+# 5 GHz, HT20. Channel is a hardcoded NON-DFS channel per car; never auto-select
+# (§5.3 -- hostapd on the Pi handles DFS poorly). US non-DFS: 36 40 44 48 149 153 157 161.
+hw_mode=a
+channel=__TTOS_WIFI_CHANNEL__
+ieee80211n=1
+wmm_enabled=1
+
+# WPA2-PSK only.
+auth_algs=1
+wpa=2
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP
+wpa_passphrase=__TTOS_WIFI_PSK__
+
+# NOTE: TX power is not a hostapd setting. Low TX power (§5.3) is applied by
+# ttos-ap.service ExecStartPost via `iw dev wlan0 set txpower fixed <mBm>`,
+# reading TTOS_WIFI_TXPOWER_MBM from /etc/default/ttos-wifi.

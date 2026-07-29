@@ -1,0 +1,7 @@
+# can0 -- INTERNAL vehicle bus. Classic CAN 2.0, 500 kbit/s (§5.2).
+# Peers are RP2040 nodes (CAN 2.0 only). The MCP2518FD runs classic mode natively.
+[Match]
+Name=can0
+
+[CAN]
+BitRate=500000
