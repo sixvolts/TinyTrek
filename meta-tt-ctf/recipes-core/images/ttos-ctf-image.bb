@@ -32,7 +32,11 @@ EXTRA_USERS_PARAMS = "\
 "
 
 # CAN overlays onto the FAT boot partition (referenced from config.txt, see rpi-config).
-IMAGE_BOOT_FILES:append = " overlays/mcp251xfd.dtbo overlays/spi1-3cs.dtbo"
+# These two are NOT in meta-raspberrypi's default KERNEL_DEVICETREE overlay set, so
+# they must be staged explicitly. Syntax is "<deploy-file>;<dest-on-boot>" — the
+# kernel deploys the overlays flat (mcp251xfd.dtbo), and config.txt loads them from
+# overlays/ on the FAT partition. (disable-bt.dtbo is already staged by the default.)
+IMAGE_BOOT_FILES:append = " mcp251xfd.dtbo;overlays/mcp251xfd.dtbo spi1-3cs.dtbo;overlays/spi1-3cs.dtbo"
 
 # Variant marker so prod vs bench is unmistakable (§4.8). Hostname stays
 # "ttos-ctf-unprovisioned" until provisioning sets the real per-car name.

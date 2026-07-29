@@ -22,7 +22,7 @@ do_deploy:append() {
     # default; Mode B moves four 0R resistors to share one SPI). Then confirm probing:
     #   dmesg | grep mcp251xfd
     #   ip -details link show can0 && ip -details link show can1
-    echo "dtparam=spi=on" >> $CONFIG
+    # (dtparam=spi=on is already emitted by ENABLE_SPI_BUS="1" above.)
     echo "dtoverlay=spi1-3cs" >> $CONFIG
     echo "dtoverlay=mcp251xfd,spi0-0,interrupt=25" >> $CONFIG
     echo "dtoverlay=mcp251xfd,spi1-0,interrupt=24" >> $CONFIG
