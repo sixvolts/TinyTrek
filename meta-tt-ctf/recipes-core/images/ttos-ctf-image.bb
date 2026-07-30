@@ -40,6 +40,11 @@ EXTRA_USERS_PARAMS = "\
 # overlays/ on the FAT partition. (disable-bt.dtbo is already staged by the default.)
 IMAGE_BOOT_FILES:append = " mcp251xfd.dtbo;overlays/mcp251xfd.dtbo spi1-3cs.dtbo;overlays/spi1-3cs.dtbo"
 
+# Ship the provisioning template on the FAT boot partition so a flashed card is
+# ready to edit in place (§5.6 workflow). ttos-provision deploys it to DEPLOY_DIR_IMAGE.
+IMAGE_BOOT_FILES:append = " ttos-provision.conf.example;ttos-provision.conf.example"
+do_image_wic[depends] += "ttos-provision:do_deploy"
+
 # Variant marker so prod vs bench is unmistakable (§4.8). Hostname stays
 # "ttos-ctf-unprovisioned" until provisioning sets the real per-car name.
 ROOTFS_POSTPROCESS_COMMAND += "ttos_variant_marker; "

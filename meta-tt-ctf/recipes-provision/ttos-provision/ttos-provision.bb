@@ -12,11 +12,21 @@ SRC_URI = " \
     file://ttos-provision.conf.example \
 "
 
-inherit systemd allarch
+inherit systemd deploy
 
 # chpasswd/usermod -> shadow; ssh-keygen -> openssh-keygen; hostapd template ->
 # ttos-wifi-ap; networkctl/hostname -> systemd.
 RDEPENDS:${PN} = "shadow openssh-keygen ttos-wifi-ap"
+
+# Deploy the example onto the FAT boot partition too (see IMAGE_BOOT_FILES in the
+# image recipe), so a freshly-flashed card already carries the template -- copy it
+# to ttos-provision.conf, edit per car, boot. No round-trip to the build box.
+# (Machine-specific deploy, so this recipe is no longer allarch.)
+do_deploy() {
+    install -d ${DEPLOYDIR}
+    install -m 0644 ${WORKDIR}/ttos-provision.conf.example ${DEPLOYDIR}/ttos-provision.conf.example
+}
+addtask deploy after do_install before do_build
 
 SYSTEMD_SERVICE:${PN} = "ttos-provision.service"
 SYSTEMD_AUTO_ENABLE = "enable"
