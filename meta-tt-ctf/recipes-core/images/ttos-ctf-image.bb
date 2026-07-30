@@ -13,6 +13,7 @@ IMAGE_INSTALL:append = " \
     ntp sntp \
     curl openssl vim-tiny \
     can-utils iproute2 \
+    bash \
     hostapd iw ttos-wifi-ap \
     socketcand \
     sudo ttos-ops \
