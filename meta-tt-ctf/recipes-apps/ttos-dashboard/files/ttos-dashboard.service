@@ -1,5 +1,5 @@
 [Unit]
-Description=TTOS CTF read-only CAN bus dashboard
+Description=TinyTrek CTF operator console (CAN dashboard)
 After=network.target systemd-networkd.service
 Wants=network.target
 
@@ -9,10 +9,11 @@ ExecStart=/usr/bin/ttos-dashboard
 Restart=on-failure
 RestartSec=3
 
-# Unprivileged: a transient user with just CAP_NET_RAW to open the AF_CAN socket.
+# Unprivileged: a transient user with CAP_NET_RAW (AF_CAN socket) and
+# CAP_NET_BIND_SERVICE (bind port 80 on the AP address).
 DynamicUser=yes
-AmbientCapabilities=CAP_NET_RAW
-CapabilityBoundingSet=CAP_NET_RAW
+AmbientCapabilities=CAP_NET_RAW CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

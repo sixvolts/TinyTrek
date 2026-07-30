@@ -1,6 +1,11 @@
-// Command canfeed injects synthetic CAN traffic onto an interface (default vcan0)
-// so the dashboard can be developed and demoed on arcana without the real vehicle.
-// It mimics a handful of periodic "ECUs" plus an occasional CAN FD frame.
+// Command canfeed injects synthetic CAN traffic so the dashboard can be developed
+// and demoed on arcana without the real vehicle.
+//
+//	-profile drive : the reused TinyTrek drive protocol on the internal bus --
+//	                 0x115 BMS power + 0x111/0x113 L/R motor commands, cycling
+//	                 through a plausible forward/turn/reverse/stop sequence.
+//	-profile diag  : diagnostic-style traffic on the external bus (extended IDs
+//	                 and CAN FD frames).
 package main
 
 import (
@@ -12,74 +17,111 @@ import (
 	"ttos.local/dashboard/internal/canbus"
 )
 
-type ecu struct {
-	id     uint32
-	ext    bool
-	fd     bool
-	length int
-	period time.Duration
-	label  string
-}
-
 func main() {
 	iface := flag.String("iface", "vcan0", "CAN interface to send on")
+	profile := flag.String("profile", "drive", "traffic profile: drive|diag")
 	rate := flag.Float64("rate", 1.0, "speed multiplier (higher = faster)")
 	flag.Parse()
 
 	conn, err := canbus.Open(*iface)
 	if err != nil {
-		log.Fatalf("open %s: %v (did you create it? sudo ip link add %s type vcan && sudo ip link set %s up)",
+		log.Fatalf("open %s: %v (create it: sudo ip link add %s type vcan && sudo ip link set %s up)",
 			*iface, err, *iface, *iface)
 	}
 	defer conn.Close()
-	log.Printf("canfeed: sending synthetic frames on %s (rate x%.1f)", *iface, *rate)
+	log.Printf("canfeed: profile=%s on %s (rate x%.1f)", *profile, *iface, *rate)
 
-	// A small cast of periodic senders, loosely vehicle-like.
-	ecus := []ecu{
-		{id: 0x100, length: 8, period: 20 * time.Millisecond, label: "powertrain/rpm"},
-		{id: 0x110, length: 8, period: 50 * time.Millisecond, label: "powertrain/speed"},
-		{id: 0x200, length: 6, period: 100 * time.Millisecond, label: "body/lights"},
-		{id: 0x201, length: 4, period: 200 * time.Millisecond, label: "body/doors"},
-		{id: 0x18DAF110, ext: true, length: 8, period: 500 * time.Millisecond, label: "diag/uds-resp"},
-		{id: 0x300, fd: true, length: 16, period: 250 * time.Millisecond, label: "fd/telemetry"},
-		{id: 0x7DF, length: 8, period: 1000 * time.Millisecond, label: "diag/obd-req"},
+	if *profile == "diag" {
+		runDiag(conn, *rate)
+	} else {
+		runDrive(conn, *rate)
 	}
+}
 
-	rng := rand.New(rand.NewSource(1)) // deterministic-ish; this is a dev tool
-	stop := make(chan struct{})
-	for _, e := range ecus {
-		go func(e ecu) {
-			counter := byte(0)
-			p := time.Duration(float64(e.period) / *rate)
+// runDrive replays a plausible driving session using the reused protocol.
+func runDrive(conn *canbus.Conn, rate float64) {
+	type step struct {
+		ld, rd byte
+		moving bool
+		dur    time.Duration
+	}
+	seq := []step{
+		{0x01, 0x01, true, 2500 * time.Millisecond}, // forward
+		{0x01, 0x01, false, 800 * time.Millisecond}, // stop
+		{0x01, 0x02, true, 1200 * time.Millisecond}, // pivot right (CW)
+		{0x01, 0x01, false, 700 * time.Millisecond},
+		{0x02, 0x02, true, 1500 * time.Millisecond}, // reverse
+		{0x01, 0x01, false, 900 * time.Millisecond},
+		{0x02, 0x01, true, 1200 * time.Millisecond}, // pivot left (CCW)
+		{0x01, 0x01, false, 1100 * time.Millisecond},
+	}
+	scale := func(d time.Duration) time.Duration { return time.Duration(float64(d) / rate) }
+	refresh := scale(66 * time.Millisecond) // motor command refresh while moving (~15 Hz)
+
+	for {
+		for _, s := range seq {
+			if s.moving {
+				_ = conn.Send(bms(true)) // power on (12V)
+				deadline := time.Now().Add(scale(s.dur))
+				for time.Now().Before(deadline) {
+					_ = conn.Send(motor(0x111, s.ld, 0xFF))
+					_ = conn.Send(motor(0x113, s.rd, 0xFF))
+					time.Sleep(refresh)
+				}
+			} else {
+				_ = conn.Send(motor(0x111, 0x01, 0x00)) // speed 0 = stop
+				_ = conn.Send(motor(0x113, 0x01, 0x00))
+				_ = conn.Send(bms(false)) // power off
+				time.Sleep(scale(s.dur))
+			}
+		}
+	}
+}
+
+func motor(id uint32, dir, speed byte) canbus.Frame {
+	return canbus.Frame{ID: id, Data: []byte{0, 0, 0, speed, dir}}
+}
+func bms(on bool) canbus.Frame {
+	v := byte(0x02)
+	if on {
+		v = 0x01
+	}
+	return canbus.Frame{ID: 0x115, Data: []byte{v}}
+}
+
+// runDiag emits diagnostic-style traffic (extended IDs + CAN FD) on the external bus.
+func runDiag(conn *canbus.Conn, rate float64) {
+	type gen struct {
+		id     uint32
+		ext    bool
+		fd     bool
+		length int
+		period time.Duration
+	}
+	gens := []gen{
+		{0x7DF, false, false, 8, 500 * time.Millisecond},     // OBD request (broadcast)
+		{0x7E8, false, false, 8, 500 * time.Millisecond},     // OBD response
+		{0x18DAF110, true, false, 8, 300 * time.Millisecond}, // UDS (extended)
+		{0x400, false, true, 24, 200 * time.Millisecond},     // FD telemetry
+	}
+	rng := rand.New(rand.NewSource(7))
+	for _, g := range gens {
+		go func(g gen) {
+			p := time.Duration(float64(g.period) / rate)
 			if p < time.Millisecond {
 				p = time.Millisecond
 			}
 			t := time.NewTicker(p)
 			defer t.Stop()
-			for {
-				select {
-				case <-stop:
-					return
-				case <-t.C:
-					data := make([]byte, e.length)
-					rng.Read(data)
-					data[0] = counter // a moving byte so the UI visibly changes
-					counter++
-					f := canbus.Frame{
-						Iface: *iface,
-						ID:    e.id,
-						Ext:   e.ext,
-						FD:    e.fd,
-						BRS:   e.fd,
-						Data:  data,
-					}
-					if err := conn.Send(f); err != nil {
-						log.Printf("send %X (%s): %v", e.id, e.label, err)
-					}
-				}
+			ctr := byte(0)
+			for range t.C {
+				data := make([]byte, g.length)
+				rng.Read(data)
+				data[0] = ctr
+				ctr++
+				_ = conn.Send(canbus.Frame{ID: g.id, Ext: g.ext, FD: g.fd, BRS: g.fd, Data: data})
 			}
-		}(e)
+		}(g)
 	}
-
-	select {} // run until killed
+	select {}
 }

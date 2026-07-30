@@ -19,6 +19,7 @@ import (
 	"io/fs"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -41,6 +42,7 @@ func main() {
 	wifiIf := flag.String("wifi", envOr("TTOS_DASH_WIFI_IF", "wlan0"), "interface for the WiFi indicator")
 	ethIf := flag.String("eth", envOr("TTOS_DASH_ETH_IF", "eth0"), "interface for the Ethernet indicator")
 	demo := flag.Bool("demo", false, "synthesize battery/sensor indicators (arcana mock)")
+	driveIf := flag.String("drive", os.Getenv("TTOS_DASH_DRIVE"), "CAN interface to SEND control frames on (empty = read-only)")
 	flag.Parse()
 
 	ifaces := splitClean(*ifacesArg)
@@ -53,6 +55,9 @@ func main() {
 		go readLoop(ifc)
 	}
 	go statusLoop(*wifiIf, *ethIf, *demo)
+	if *driveIf != "" {
+		go openDrive(*driveIf)
+	}
 
 	logf("info", "console starting: ifaces=%s", strings.Join(ifaces, ","))
 
@@ -64,9 +69,22 @@ func main() {
 	mux.HandleFunc("/api/control", handleControl)
 	mux.Handle("/", uiHandler(*webdir))
 
+	ln := listenRetry(*addr)
 	log.Printf("listening on %s", *addr)
-	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	log.Fatal(srv.ListenAndServe())
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	log.Fatal(srv.Serve(ln))
+}
+
+// listenRetry keeps trying to bind (e.g. the AP address may not be up at boot).
+func listenRetry(addr string) net.Listener {
+	for {
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			return ln
+		}
+		log.Printf("listen %s failed (%v); retrying in 3s", addr, err)
+		time.Sleep(3 * time.Second)
+	}
 }
 
 // ---- event publishers -----------------------------------------------------
@@ -214,6 +232,49 @@ var controlCmds = map[string]bool{
 	"cw": true, "ccw": true, "stop": true,
 }
 
+// TinyTrek reused protocol (from the public repo firmware -- no firmware change):
+//
+//	0x111 = left motor, 0x113 = right motor: [_,_,_,speed,dir]
+//	        speed 0xFF = full, 0x00 = stop; dir 0x01 = fwd, 0x02 = rev
+//	0x115 = BMS power: [0x01] = on (12V), [0x02] = off
+const (
+	idLMotor = 0x111
+	idRMotor = 0x113
+	idBMS    = 0x115
+)
+
+func motorFrame(id uint32, dir byte, moving bool) canbus.Frame {
+	speed := byte(0xFF)
+	if !moving {
+		speed = 0x00
+	}
+	return canbus.Frame{ID: id, Data: []byte{0, 0, 0, speed, dir}}
+}
+
+func bmsFrame(on bool) canbus.Frame {
+	v := byte(0x02)
+	if on {
+		v = 0x01
+	}
+	return canbus.Frame{ID: idBMS, Data: []byte{v}}
+}
+
+// cmdMotors maps a UI command to left/right motor directions (differential drive).
+func cmdMotors(cmd string) (ldir, rdir byte) {
+	switch cmd {
+	case "forward":
+		return 0x01, 0x01
+	case "back":
+		return 0x02, 0x02
+	case "left", "ccw":
+		return 0x02, 0x01
+	case "right", "cw":
+		return 0x01, 0x02
+	default: // stop
+		return 0x01, 0x01
+	}
+}
+
 func handleControl(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -226,15 +287,70 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad command", http.StatusBadRequest)
 		return
 	}
-	// TODO(control phase): translate the command into CAN frame(s) on the drive
-	// bus. For now this is a validated, logged stub so the UI wiring is complete.
+
+	ld, rd := cmdMotors(body.Cmd)
+	var frames []canbus.Frame
 	if body.Cmd == "stop" {
 		clearMotion()
+		frames = []canbus.Frame{motorFrame(idLMotor, ld, false), motorFrame(idRMotor, rd, false), bmsFrame(false)}
 	} else {
+		if !motionActive() {
+			frames = append(frames, bmsFrame(true)) // power on (12V) when starting from rest
+		}
 		armMotion()
+		frames = append(frames, motorFrame(idLMotor, ld, true), motorFrame(idRMotor, rd, true))
 	}
-	logf("cmd", "control: %s", body.Cmd)
+
+	if sendDrive(frames) {
+		logf("cmd", "control: %s -> sent %s", body.Cmd, describe(frames))
+	} else {
+		logf("cmd", "control: %s (drive disabled) -> would send %s", body.Cmd, describe(frames))
+	}
 	writeJSON(w, map[string]any{"ok": true, "cmd": body.Cmd})
+}
+
+// ---- drive writer (optional; -drive enables sending on a bus) --------------
+
+var drive struct {
+	sync.Mutex
+	conn *canbus.Conn
+}
+
+func openDrive(iface string) {
+	for {
+		c, err := canbus.Open(iface)
+		if err != nil {
+			logf("warn", "drive %s: open failed (%v); retrying in 3s", iface, err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		drive.Lock()
+		drive.conn = c
+		drive.Unlock()
+		logf("info", "drive bus %s ready -- control is LIVE", iface)
+		return
+	}
+}
+
+func sendDrive(frames []canbus.Frame) bool {
+	drive.Lock()
+	c := drive.conn
+	drive.Unlock()
+	if c == nil {
+		return false
+	}
+	for _, f := range frames {
+		_ = c.Send(f)
+	}
+	return true
+}
+
+func describe(frames []canbus.Frame) string {
+	parts := make([]string, 0, len(frames))
+	for _, f := range frames {
+		parts = append(parts, fmt.Sprintf("%X#%X", f.ID, f.Data))
+	}
+	return strings.Join(parts, " ")
 }
 
 func carInfo() map[string]string {

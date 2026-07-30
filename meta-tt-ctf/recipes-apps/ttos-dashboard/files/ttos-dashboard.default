@@ -1,5 +1,14 @@
 # TTOS CTF CAN dashboard configuration (read by the systemd unit).
-# Listen address (host:port; ":8080" = all interfaces).
-TTOS_DASH_ADDR=:8080
+
+# Listen address. On the car the console is served on the WiFi AP address, port 80
+# (reachable only over the AP). This must match the AP address in 30-wlan-ap.network
+# / the per-car provisioned value. The service retries the bind until wlan0 is up.
+TTOS_DASH_ADDR=192.168.4.1:80
+
 # Comma-separated CAN interfaces to monitor.
 TTOS_DASH_IFACES=can0,can1
+
+# Interface to SEND control frames on (the internal drive bus). EMPTY = read-only:
+# the control buttons validate + log but do not transmit. Set to "can0" to enable
+# live driving (control phase).
+TTOS_DASH_DRIVE=
