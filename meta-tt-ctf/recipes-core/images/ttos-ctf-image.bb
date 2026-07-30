@@ -12,7 +12,7 @@ IMAGE_INSTALL:append = " \
     kernel-image kernel-devicetree \
     ntp sntp \
     curl openssl vim-tiny \
-    can-utils iproute2 \
+    can-utils can-utils-access iproute2 \
     bash \
     hostapd iw ttos-wifi-ap \
     socketcand \

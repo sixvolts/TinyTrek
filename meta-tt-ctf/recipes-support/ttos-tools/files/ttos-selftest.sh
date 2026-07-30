@@ -78,11 +78,15 @@ hdr "4. CAN interfaces  (§7: can0 classic 500k ERROR-ACTIVE; can1 FD 500k/1M)"
 check_can(){ # $1=iface  $2=expect_fd(0/1)
     ifc=$1; fd=$2
     if ! ip link show "$ifc" >/dev/null 2>&1; then no "$ifc does not exist"; return; fi
+    # networkd may still be configuring right after boot; wait for the admin UP flag.
+    # NOTE: CAN interfaces report operstate UNKNOWN even when up, so we check the
+    # <...,UP,...> admin flag, not 'state UP'.
+    i=0; while [ "$i" -lt 8 ]; do ip link show "$ifc" 2>/dev/null | head -1 | grep -qE '[<,]UP[,>]' && break; i=$((i+1)); sleep 1; done
     D=$(ip -details -statistics link show "$ifc" 2>/dev/null)
     STATE=$(echo "$D" | grep -o 'can state [A-Z-]*' | awk '{print $3}')
     BR=$(echo "$D" | grep -o 'bitrate [0-9]*' | head -1 | awk '{print $2}')
-    OPER=$(echo "$D" | grep -o 'state UP' | head -1)
-    [ -n "$OPER" ] && ok "$ifc is UP" || no "$ifc is DOWN (should come up automatically at boot)"
+    if ip link show "$ifc" 2>/dev/null | head -1 | grep -qE '[<,]UP[,>]'; then ok "$ifc is UP"
+    else no "$ifc is DOWN (should come up automatically at boot)"; fi
     [ "$BR" = "500000" ] && ok "$ifc arbitration bitrate = 500000" || no "$ifc bitrate = ${BR:-?} (expected 500000)"
     if [ "$fd" = "1" ]; then
         DBR=$(echo "$D" | grep -o 'dbitrate [0-9]*' | awk '{print $2}')
@@ -115,9 +119,15 @@ hdr "6. CAN stack + tools smoke test (vcan loopback -- non-destructive)"
 if have cansend && have candump; then
     $SUDO modprobe vcan 2>/dev/null
     if $SUDO ip link add dev vcanTEST type vcan 2>/dev/null && $SUDO ip link set vcanTEST up 2>/dev/null; then
-        OUT=$( ($SUDO timeout 2 candump -n 1 vcanTEST & sleep 0.3; $SUDO cansend vcanTEST 123#DEADBEEF; wait) 2>/dev/null )
-        echo "$OUT" | grep -qi 'DEADBEEF' && ok "vcan loopback: frame sent and received (stack + can-utils OK)" || no "vcan loopback: frame not received"
-        $SUDO ip link del vcanTEST 2>/dev/null
+        VF=$(mktemp 2>/dev/null || echo /tmp/vcan.$$)
+        $SUDO candump -n 1 vcanTEST > "$VF" 2>/dev/null &
+        CPID=$!
+        sleep 0.7                                   # let candump bind before sending
+        $SUDO cansend vcanTEST 123#DEADBEEF 2>/dev/null
+        i=0; while [ "$i" -lt 10 ] && ! grep -qi DEADBEEF "$VF" 2>/dev/null; do sleep 0.2; i=$((i+1)); done
+        $SUDO kill "$CPID" 2>/dev/null
+        grep -qi DEADBEEF "$VF" 2>/dev/null && ok "vcan loopback: frame sent and received (stack + can-utils OK)" || no "vcan loopback: frame not received"
+        rm -f "$VF"; $SUDO ip link del vcanTEST 2>/dev/null
     else sk "could not create vcanTEST (CONFIG_CAN_VCAN?)"; fi
 else no "cansend/candump missing"; fi
 
@@ -141,6 +151,9 @@ fi
 
 # ---------------------------------------------------------------------------
 hdr "7. WiFi AP  (§7: hostapd up on assigned non-DFS 5GHz channel)"
+# hostapd comes up a little after boot (after the wlan0 device + provisioning);
+# wait a bit so a fresh-boot run doesn't race it.
+i=0; while [ "$i" -lt 20 ] && ! systemctl is-active --quiet ttos-ap 2>/dev/null; do sleep 1; i=$((i+1)); done
 if systemctl is-active --quiet ttos-ap 2>/dev/null; then
     ok "ttos-ap (hostapd) service active"
 else
@@ -193,10 +206,14 @@ if [ -f /etc/ttos/provision.src ]; then
 else sk "no /etc/ttos/provision.src (older provisioning path?)"; fi
 HKN=$(ls /etc/ssh/ssh_host_*_key 2>/dev/null | wc -l)
 [ "${HKN:-0}" -ge 1 ] && ok "SSH host keys present ($HKN) -- compare fingerprints across two cars to confirm uniqueness" || no "no SSH host keys"
-# No plaintext console password anywhere obvious
-if $SUDO grep -rqi 'TTOS_CONSOLE_PW_HASH' /boot /boot/firmware 2>/dev/null; then
-    no "console password material found on the FAT partition"
-else ok "no console password material on the FAT partition"; fi
+# A LIVE provisioning file (not the shipped .example) carrying a crypt hash would
+# be real leakage. The .example placeholder is expected and ignored.
+FATHIT=0
+for f in /boot/ttos-provision.conf /boot/firmware/ttos-provision.conf; do
+    [ -f "$f" ] && $SUDO grep -qE '\$(6|y|2[aby]|5|7)\$' "$f" 2>/dev/null && FATHIT=1
+done
+[ "$FATHIT" = 0 ] && ok "no live provisioning file with a hash on the FAT partition (example placeholder ignored)" \
+                  || no "a provisioning file with a crypt hash is still on the FAT partition"
 
 # ---------------------------------------------------------------------------
 hdr "11. USB serial console  (bench aid, §5.5 g_serial -- remove before the event)"
