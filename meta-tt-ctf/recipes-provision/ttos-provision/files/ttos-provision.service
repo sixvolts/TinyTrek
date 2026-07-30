@@ -1,6 +1,10 @@
 [Unit]
 Description=TTOS CTF first-boot provisioning (§5.6)
 After=local-fs.target
+# The provisioning file lives on the FAT boot partition. Order after (and pull in)
+# its mount so we never run before it is mounted -- otherwise first boot can miss
+# the file, fail loud, and only succeed on a later boot once the mount has settled.
+RequiresMountsFor=/boot /boot/firmware
 # Must run before anything that consumes per-car state:
 #  - sshd: so per-car host keys exist before the first SSH connection
 #  - ttos-ap: it Requires= this and reads the rendered hostapd.conf

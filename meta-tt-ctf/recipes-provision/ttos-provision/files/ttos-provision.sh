@@ -41,9 +41,18 @@ mkdir -p "$STATE_DIR"
 # succeed. A malformed file must stay on the FAT partition so it can be fixed in
 # the field with a laptop (§5.6). The work copy lives on tmpfs (/run), cleared on
 # reboot, so nothing sensitive is persisted on a failed run.
+# Wait up to ~20s for the boot partition to mount and the file to appear (guards
+# against a first-boot mount race). Bail early if a staged rootfs copy exists.
 FATFILE=""
-for c in $FAT_CANDIDATES; do
-    if [ -f "$c" ]; then FATFILE="$c"; break; fi
+tries=0
+while [ "$tries" -lt 20 ]; do
+    for c in $FAT_CANDIDATES; do
+        if [ -f "$c" ]; then FATFILE="$c"; break; fi
+    done
+    [ -n "$FATFILE" ] && break
+    [ -f "$SRC" ] && break
+    tries=$((tries + 1))
+    sleep 1
 done
 
 WORK=/run/ttos-provision.work
