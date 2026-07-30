@@ -1,0 +1,4 @@
+# use_acm=1 makes g_serial present as USB CDC-ACM, which has native drivers on
+# macOS (/dev/cu.usbmodem*), Windows 10+ (usbser.sys, COMx) and Linux
+# (/dev/ttyACM0) -- the one gadget class that is genuinely portable (§5.5).
+options g_serial use_acm=1

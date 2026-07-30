@@ -7,6 +7,14 @@ do_deploy:append() {
     # Free the PL011 UART (ttyAMA0) for the serial ops console (§5.5). No downside here.
     echo "dtoverlay=disable-bt" >> $CONFIG
 
+    # USB CDC-ACM serial ops console on the USB-C port (§5.5 g_serial path).
+    # This is the SERIAL gadget that §4.7 explicitly kept when the Ethernet/RNDIS
+    # gadget was dropped -- NOT a network gadget. dr_mode=peripheral puts the USB-C
+    # port in device mode so a laptop enumerates /dev/ttyACM* (mac/win/linux native).
+    # See the ttos-usb-console recipe for module load + getty. TEMPORARY bench aid --
+    # expected to be removed before the event.
+    echo "dtoverlay=dwc2,dr_mode=peripheral" >> $CONFIG
+
     # --- Waveshare 2-CH CAN FD HAT Rev2.1, "Mode A" (factory default) -----------
     # Mode A = two channels on TWO INDEPENDENT SPI buses (spi0 + spi1).
     # Source of truth: https://www.waveshare.com/wiki/2-CH_CAN_FD_HAT (verbatim below)

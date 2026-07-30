@@ -17,6 +17,8 @@ IMAGE_INSTALL:append = " \
     socketcand \
     sudo ttos-ops \
     ttos-provision \
+    ttos-usb-console \
+    ttos-tools \
     python3 python3-core \
 "
 

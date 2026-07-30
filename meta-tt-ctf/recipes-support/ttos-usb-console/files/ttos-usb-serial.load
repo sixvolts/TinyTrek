@@ -1,0 +1,4 @@
+# Load the USB-C peripheral controller and the CDC-ACM serial gadget at boot.
+# g_serial creates /dev/ttyGS0; ttos-usb-console enables a getty on it.
+dwc2
+g_serial
