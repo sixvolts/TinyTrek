@@ -37,26 +37,25 @@ fi
 mkdir -p "$STATE_DIR"
 
 # --- Locate the source ------------------------------------------------------
-# Normal path: consume the FAT file. Crash-recovery path: a prior run already
-# copied it to $SRC (and may have deleted the FAT copy) but did not finish.
+# IMPORTANT: do NOT consume (wipe) the FAT file until AFTER validation+apply
+# succeed. A malformed file must stay on the FAT partition so it can be fixed in
+# the field with a laptop (§5.6). The work copy lives on tmpfs (/run), cleared on
+# reboot, so nothing sensitive is persisted on a failed run.
 FATFILE=""
 for c in $FAT_CANDIDATES; do
     if [ -f "$c" ]; then FATFILE="$c"; break; fi
 done
 
+WORK=/run/ttos-provision.work
 if [ -n "$FATFILE" ]; then
-    # Copy into the rootfs, normalising Windows/macOS CRLF line endings, then
-    # wipe the copy off the laptop-readable FAT partition ASAP (§5.6: later phases
-    # put Data IDs / flag codes here; they must not sit in plaintext on FAT).
-    tr -d '\r' < "$FATFILE" > "$SRC" || fail "cannot stage $FATFILE"
-    chmod 600 "$SRC"
-    sz=$(wc -c < "$FATFILE" 2>/dev/null || echo 0)
-    head -c "$sz" /dev/urandom > "$FATFILE" 2>/dev/null
-    sync
-    rm -f "$FATFILE"
-    sync
-    log "consumed provisioning file from $FATFILE"
+    # Normalise Windows/macOS CRLF into a tmpfs work copy; leave the FAT file be.
+    tr -d '\r' < "$FATFILE" > "$WORK" || fail "cannot read $FATFILE"
+    chmod 600 "$WORK"
+    SRCFILE="$WORK"
+    log "found provisioning file: $FATFILE"
 elif [ -f "$SRC" ]; then
+    # Crash-recovery: a prior run validated + staged to the rootfs but did not finish.
+    SRCFILE="$SRC"
     log "resuming from staged provisioning data (FAT copy already consumed)"
 else
     fail "no provisioning file found (looked for: $FAT_CANDIDATES)"
@@ -66,7 +65,10 @@ fi
 P_HOSTNAME=""; P_CAR_ID=""; P_SSID=""; P_PSK=""; P_COUNTRY=""; P_CHANNEL=""
 P_TXPOWER="500"; P_PWHASH=""; P_SSHKEY=""; P_ETH_ADDR=""
 
-trim() { printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//'; }
+# Strip a trailing inline comment (whitespace + # ... to EOL), then surrounding
+# whitespace and one layer of quotes. A '#' NOT preceded by whitespace is kept,
+# so a PSK may contain '#'. Avoid a literal " #" inside a value.
+trim() { printf '%s' "$1" | sed 's/[[:space:]]#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//'; }
 
 while IFS='=' read -r key val; do
     case "$key" in ''|\#*) continue ;; esac
@@ -85,7 +87,7 @@ while IFS='=' read -r key val; do
         TTOS_ETH_ADDRESS)       P_ETH_ADDR=$val ;;
         *) log "ignoring unknown key: $key" ;;
     esac
-done < "$SRC"
+done < "$SRCFILE"
 
 # --- Validate (fail loud, never apply defaults) -----------------------------
 for pair in "TTOS_HOSTNAME=$P_HOSTNAME" "TTOS_CAR_ID=$P_CAR_ID" \
@@ -102,9 +104,16 @@ case "$P_PWHASH" in
     *) fail "TTOS_CONSOLE_PW_HASH is not a crypt hash (expected \$y\$/\$6\$...); refusing plaintext" ;;
 esac
 
-# WPA2 passphrase sanity (8..63 chars) -- catches a hash pasted by mistake.
+# WPA2 PSK: either an 8..63-char passphrase, or a 64 hex-digit raw PSK (PMK).
+# Anything else (e.g. a crypt hash pasted by mistake) fails loud.
 plen=$(printf '%s' "$P_PSK" | wc -c)
-[ "$plen" -ge 8 ] && [ "$plen" -le 63 ] || fail "TTOS_WIFI_PSK must be 8..63 chars (got $plen)"
+if printf '%s' "$P_PSK" | grep -qiE '^[0-9a-f]{64}$'; then
+    PSK_HEX=1
+elif [ "$plen" -ge 8 ] && [ "$plen" -le 63 ]; then
+    PSK_HEX=0
+else
+    fail "TTOS_WIFI_PSK must be an 8..63 char passphrase or 64 hex digits (got $plen chars)"
+fi
 
 # Non-DFS 5 GHz channel guard (US set); warn but do not hard-fail on others.
 case " 36 40 44 48 149 153 157 161 " in
@@ -133,8 +142,12 @@ auth_algs=1
 wpa=2
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
-wpa_passphrase=$P_PSK
 EOF
+if [ "$PSK_HEX" = 1 ]; then
+    echo "wpa_psk=$P_PSK" >> "$HOSTAPD_CONF"          # raw 256-bit PMK (64 hex digits)
+else
+    echo "wpa_passphrase=$P_PSK" >> "$HOSTAPD_CONF"   # 8..63 char passphrase
+fi
 chmod 600 "$HOSTAPD_CONF"
 
 cat > /etc/default/ttos-wifi <<EOF
@@ -168,6 +181,20 @@ ssh-keygen -A >/dev/null 2>&1 || fail "ssh-keygen -A failed"
 
 # Restore a clean login banner (in case a previous failed run left a warning).
 printf 'TinyTrekOS-CTF \\n \\l\n\n' > /etc/issue 2>/dev/null
+
+# --- Consume: stage into the rootfs, THEN wipe the FAT copy -----------------
+# Only now that everything validated and applied. A failed run above leaves the
+# FAT file intact so it can be corrected in the field (§5.6).
+if [ "$SRCFILE" != "$SRC" ]; then
+    cp "$SRCFILE" "$SRC" && chmod 600 "$SRC"
+fi
+if [ -n "${FATFILE:-}" ] && [ -f "$FATFILE" ]; then
+    sz=$(wc -c < "$FATFILE" 2>/dev/null || echo 0)
+    head -c "$sz" /dev/urandom > "$FATFILE" 2>/dev/null
+    sync; rm -f "$FATFILE"; sync
+    log "consumed provisioning file from $FATFILE"
+fi
+rm -f "$WORK" 2>/dev/null
 
 # --- Finalize ---------------------------------------------------------------
 : > "$MARKER"
