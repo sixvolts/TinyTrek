@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TinyTrekOS-CTF · CAN Monitor</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#30363d;
+    --text:#e6edf3; --muted:#8b949e; --accent:#58a6ff;
+    --can0:#5ec8d8; --can1:#f0a35e; --other:#9b8cff;
+    --badge:#21262d; --err:#f85149; --ok:#3fb950;
+    --mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);
+    display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+  header{display:flex;align-items:center;gap:20px;padding:10px 16px;
+    background:var(--panel);border-bottom:1px solid var(--border);flex:0 0 auto}
+  .brand{font-weight:600;letter-spacing:.2px;display:flex;align-items:center;gap:9px;white-space:nowrap}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--muted);box-shadow:0 0 0 3px transparent}
+  .dot.live{background:var(--ok);box-shadow:0 0 0 3px rgba(63,185,80,.18)}
+  .dot.down{background:var(--err);box-shadow:0 0 0 3px rgba(248,81,73,.18)}
+  .stats{display:flex;gap:10px;margin-left:auto;flex-wrap:wrap}
+  .tile{background:var(--panel2);border:1px solid var(--border);border-radius:8px;
+    padding:6px 12px;min-width:88px;text-align:right}
+  .tile .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .tile .v{font-family:var(--mono);font-size:18px;font-variant-numeric:tabular-nums;line-height:1.2}
+  .tile.can0 .v{color:var(--can0)} .tile.can1 .v{color:var(--can1)}
+
+  .toolbar{display:flex;align-items:center;gap:10px;padding:8px 16px;
+    background:var(--panel);border-bottom:1px solid var(--border);flex:0 0 auto;flex-wrap:wrap}
+  button{background:var(--panel2);color:var(--text);border:1px solid var(--border);
+    border-radius:7px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  button.active{background:var(--accent);border-color:var(--accent);color:#0d1117;font-weight:600}
+  input[type=text]{background:var(--bg);color:var(--text);border:1px solid var(--border);
+    border-radius:7px;padding:6px 10px;font:inherit;font-size:13px;width:150px}
+  label.chk{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);cursor:pointer;user-select:none}
+  .sep{width:1px;height:22px;background:var(--border)}
+  .grow{flex:1}
+
+  .wrap{flex:1;overflow:auto}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13px;
+    font-variant-numeric:tabular-nums}
+  thead th{position:sticky;top:0;background:var(--panel);color:var(--muted);
+    text-align:left;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+    padding:7px 12px;border-bottom:1px solid var(--border);z-index:1}
+  tbody td{padding:3px 12px;border-bottom:1px solid rgba(48,54,61,.4);white-space:nowrap}
+  tbody tr:hover{background:rgba(88,166,255,.06)}
+  .c-if{font-weight:600} .if-can0{color:var(--can0)} .if-can1{color:var(--can1)} .if-other{color:var(--other)}
+  .c-id{color:var(--text)} .c-time{color:var(--muted)} .c-len{color:var(--muted);text-align:right}
+  .c-data{color:#c9d1d9;letter-spacing:.5px}
+  .badge{display:inline-block;font-size:10px;padding:0 5px;margin-right:3px;border-radius:4px;
+    background:var(--badge);color:var(--muted);border:1px solid var(--border)}
+  .b-ext{color:#79c0ff;border-color:#1f6feb55} .b-fd{color:#d2a8ff;border-color:#8957e555}
+  .b-rtr{color:#8b949e} .b-brs{color:#f0a35e;border-color:#bb800055} .b-err{color:var(--err);border-color:#f8514955}
+  .empty{color:var(--muted);padding:24px 16px;font-family:var(--sans)}
+  .paused thead th{background:#3d2d16;color:#f0a35e}
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand"><span id="dot" class="dot"></span> TinyTrekOS-CTF · CAN Monitor</div>
+    <div class="stats">
+      <div class="tile"><div class="k">Total</div><div class="v" id="s-total">0</div></div>
+      <div class="tile"><div class="k">Frames/s</div><div class="v" id="s-rate">0</div></div>
+      <div class="tile can0"><div class="k">can0</div><div class="v" id="s-can0">0</div></div>
+      <div class="tile can1"><div class="k">can1</div><div class="v" id="s-can1">0</div></div>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <button id="pause">Pause</button>
+    <button id="clear">Clear</button>
+    <div class="sep"></div>
+    <span id="ifaceFilters" style="display:flex;gap:12px"></span>
+    <div class="sep"></div>
+    <input type="text" id="idfilter" placeholder="filter ID (hex)…" autocomplete="off">
+    <div class="grow"></div>
+    <span class="k" style="color:var(--muted);font-size:12px" id="status">connecting…</span>
+  </div>
+
+  <div class="wrap" id="wrap">
+    <table>
+      <thead><tr>
+        <th style="width:120px">Time</th>
+        <th style="width:64px">Bus</th>
+        <th style="width:110px">ID</th>
+        <th style="width:150px">Flags</th>
+        <th style="width:48px">Len</th>
+        <th>Data</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="empty" id="empty">Waiting for frames…</div>
+  </div>
+
+<script>
+(() => {
+  const MAX_ROWS = 2000;           // cap DOM size
+  const rowsEl = document.getElementById('rows');
+  const emptyEl = document.getElementById('empty');
+  const dot = document.getElementById('dot');
+  const statusEl = document.getElementById('status');
+  const wrap = document.getElementById('wrap');
+
+  let paused = false;
+  let idFilter = '';
+  const ifaceOn = {};              // iface -> bool (shown)
+  const seenIfaces = new Set();
+
+  // stats
+  let total = 0;
+  const perIf = {};                // iface -> count
+  let windowCount = 0;             // frames in the current rate window
+
+  const pending = [];              // frames awaiting DOM flush
+
+  // ---- stream ----
+  function connect() {
+    const es = new EventSource('/events');
+    es.onopen = () => { dot.className = 'dot live'; statusEl.textContent = 'live'; };
+    es.onerror = () => { dot.className = 'dot down'; statusEl.textContent = 'reconnecting…'; };
+    es.onmessage = (ev) => {
+      let f; try { f = JSON.parse(ev.data); } catch { return; }
+      onFrame(f);
+    };
+  }
+
+  function onFrame(f) {
+    total++;
+    windowCount++;
+    perIf[f.if] = (perIf[f.if] || 0) + 1;
+    if (!seenIfaces.has(f.if)) { seenIfaces.add(f.if); addIfaceFilter(f.if); }
+    if (paused) return;
+    if (!ifaceOn[f.if]) return;
+    if (idFilter && !f.id.toUpperCase().includes(idFilter)) return;
+    pending.push(f);
+  }
+
+  // batch DOM writes on animation frames for smoothness under load
+  function flush() {
+    if (pending.length) {
+      emptyEl.style.display = 'none';
+      const frag = document.createDocumentFragment();
+      // newest first: build in reverse so the last-received ends up on top
+      for (let i = pending.length - 1; i >= 0; i--) frag.appendChild(rowFor(pending[i]));
+      rowsEl.insertBefore(frag, rowsEl.firstChild);
+      pending.length = 0;
+      while (rowsEl.childElementCount > MAX_ROWS) rowsEl.removeChild(rowsEl.lastChild);
+    }
+    requestAnimationFrame(flush);
+  }
+
+  function ifClass(i){ return i==='can0'?'if-can0':i==='can1'?'if-can1':'if-other'; }
+
+  function rowFor(f) {
+    const tr = document.createElement('tr');
+    const d = new Date(f.t * 1000);
+    const ts = d.toLocaleTimeString('en-GB', {hour12:false}) + '.' +
+               String(d.getMilliseconds()).padStart(3,'0');
+    const flags = [];
+    if (f.ext) flags.push('<span class="badge b-ext">EXT</span>');
+    if (f.fd)  flags.push('<span class="badge b-fd">FD</span>');
+    if (f.brs) flags.push('<span class="badge b-brs">BRS</span>');
+    if (f.rtr) flags.push('<span class="badge b-rtr">RTR</span>');
+    if (f.err) flags.push('<span class="badge b-err">ERR</span>');
+    const idw = f.ext ? 8 : 3;
+    tr.innerHTML =
+      `<td class="c-time">${ts}</td>` +
+      `<td class="c-if ${ifClass(f.if)}">${f.if}</td>` +
+      `<td class="c-id">${f.id.padStart(idw,'0')}</td>` +
+      `<td>${flags.join('')}</td>` +
+      `<td class="c-len">${f.len}</td>` +
+      `<td class="c-data">${fmtData(f.data)}</td>`;
+    return tr;
+  }
+
+  function fmtData(hexstr) {
+    let out = '';
+    for (let i = 0; i < hexstr.length; i += 2) out += hexstr.substr(i,2).toUpperCase() + ' ';
+    return out.trim();
+  }
+
+  // ---- stats display + rate ----
+  setInterval(() => {
+    document.getElementById('s-total').textContent = total.toLocaleString();
+    document.getElementById('s-rate').textContent = windowCount.toString();
+    document.getElementById('s-can0').textContent = (perIf['can0']||0).toLocaleString();
+    document.getElementById('s-can1').textContent = (perIf['can1']||0).toLocaleString();
+    windowCount = 0;               // 1s window
+  }, 1000);
+
+  // ---- controls ----
+  const pauseBtn = document.getElementById('pause');
+  pauseBtn.onclick = () => {
+    paused = !paused;
+    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+    pauseBtn.classList.toggle('active', paused);
+    wrap.parentElement && document.querySelector('.wrap');
+    document.querySelector('table').classList.toggle('paused', paused);
+  };
+  document.getElementById('clear').onclick = () => {
+    rowsEl.innerHTML = ''; pending.length = 0; emptyEl.style.display = '';
+  };
+  document.getElementById('idfilter').addEventListener('input', (e) => {
+    idFilter = e.target.value.trim().toUpperCase();
+  });
+
+  function addIfaceFilter(i) {
+    ifaceOn[i] = true;
+    const wrap = document.getElementById('ifaceFilters');
+    const id = 'if_' + i;
+    const lbl = document.createElement('label');
+    lbl.className = 'chk';
+    lbl.innerHTML = `<input type="checkbox" id="${id}" checked> <span class="${ifClass(i)}">${i}</span>`;
+    lbl.querySelector('input').addEventListener('change', (e) => { ifaceOn[i] = e.target.checked; });
+    wrap.appendChild(lbl);
+  }
+
+  // preload configured interfaces so their filters exist before traffic
+  fetch('/api/info').then(r => r.json()).then(info => {
+    (info.ifaces || []).forEach(i => { if (!seenIfaces.has(i)) { seenIfaces.add(i); addIfaceFilter(i); } });
+  }).catch(()=>{});
+
+  connect();
+  requestAnimationFrame(flush);
+})();
+</script>
+</body>
+</html>

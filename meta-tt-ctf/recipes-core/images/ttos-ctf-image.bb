@@ -20,6 +20,7 @@ IMAGE_INSTALL:append = " \
     ttos-provision \
     ttos-usb-console \
     ttos-tools \
+    ttos-dashboard \
     python3 python3-core \
 "
 

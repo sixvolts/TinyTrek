@@ -1,0 +1,5 @@
+# TTOS CTF CAN dashboard configuration (read by the systemd unit).
+# Listen address (host:port; ":8080" = all interfaces).
+TTOS_DASH_ADDR=:8080
+# Comma-separated CAN interfaces to monitor.
+TTOS_DASH_IFACES=can0,can1

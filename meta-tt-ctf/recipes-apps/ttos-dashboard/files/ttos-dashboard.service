@@ -1,0 +1,23 @@
+[Unit]
+Description=TTOS CTF read-only CAN bus dashboard
+After=network.target systemd-networkd.service
+Wants=network.target
+
+[Service]
+EnvironmentFile=-/etc/default/ttos-dashboard
+ExecStart=/usr/bin/ttos-dashboard
+Restart=on-failure
+RestartSec=3
+
+# Unprivileged: a transient user with just CAP_NET_RAW to open the AF_CAN socket.
+DynamicUser=yes
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_CAN
+
+[Install]
+WantedBy=multi-user.target
