@@ -72,6 +72,24 @@ plain-text file on the **FAT boot partition**.
 Login: root is **locked**; log in as **`ttos`** (serial or SSH) with the provisioned
 password, `sudo` for privilege. Root SSH is refused.
 
+## Operator console (`ttos-dashboard`)
+
+Go service serving a live CAN console on the WiFi AP at **`http://192.168.4.1`**
+(port 80). Join the car's AP, then browse to it. It monitors `can0`/`can1`, decodes
+the reused TinyTrek protocol (`0x111`/`0x113` motor, `0x115` BMS/12V), and has a
+control pad + indicators (battery/sensors/network/12V).
+
+- **Browser note:** use **Safari or Firefox**. Chrome with "Always use secure
+  connections" upgrades `http://192.168.4.1` to HTTPS (port 443, not served) and
+  won't fall back, so it shows `ERR_CONNECTION_REFUSED` even though the console is
+  fine. Fix in Chrome: `chrome://settings/security` → turn off "Always use secure
+  connections". `curl http://192.168.4.1/` on the car always works.
+- **Driving is gated off by default** (`TTOS_DASH_DRIVE=` empty in
+  `/etc/default/ttos-dashboard`): the control buttons validate + log but do **not**
+  transmit. To enable live driving, set `TTOS_DASH_DRIVE=can0` and
+  `systemctl restart ttos-dashboard` (journal: "control is LIVE"). First live test:
+  wheels-off, STOP ready.
+
 ## Verification on real hardware (maps to brief §7)
 
 ```bash
