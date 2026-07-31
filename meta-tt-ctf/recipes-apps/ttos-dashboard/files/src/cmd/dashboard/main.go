@@ -45,9 +45,11 @@ func main() {
 	ethIf := flag.String("eth", envOr("TTOS_DASH_ETH_IF", "eth0"), "interface for the Ethernet indicator")
 	demo := flag.Bool("demo", false, "synthesize battery/sensor indicators (arcana mock)")
 	driveIf := flag.String("drive", os.Getenv("TTOS_DASH_DRIVE"), "CAN interface to SEND control frames on (empty = read-only)")
-	steps := flag.Uint("steps", uint(envInt("TTOS_DASH_STEPS", 255)), "stepper steps per motion command")
+	steps := flag.Uint("steps", uint(envInt("TTOS_DASH_STEPS", 255)), "stepper steps per straight move")
+	turns := flag.Uint("turnsteps", uint(envInt("TTOS_DASH_TURN_STEPS", 128)), "stepper steps per turn/rotate")
 	flag.Parse()
 	stepsPerMove = uint32(*steps)
+	turnSteps = uint32(*turns)
 
 	ifaces := splitClean(*ifacesArg)
 	if len(ifaces) == 0 {
@@ -244,8 +246,23 @@ const (
 	idBMS    = 0x115
 )
 
-// stepsPerMove is how far each motion command advances a wheel (set from -steps).
-var stepsPerMove uint32 = 255
+// Steps per motion command: straight moves and turns are tuned separately (turns
+// tend to over-rotate). Set from -steps / -turnsteps (env TTOS_DASH_STEPS /
+// TTOS_DASH_TURN_STEPS) -- tune live on the car, no rebuild.
+var (
+	stepsPerMove uint32 = 255
+	turnSteps    uint32 = 128
+)
+
+// moveSteps returns the step count for a command (turns use the smaller value).
+func moveSteps(cmd string) uint32 {
+	switch cmd {
+	case "left", "right", "cw", "ccw":
+		return turnSteps
+	default: // forward, back
+		return stepsPerMove
+	}
+}
 
 func motorFrame(id uint32, dir byte, steps uint32) canbus.Frame {
 	data := make([]byte, 5)
@@ -302,7 +319,8 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 			setPower(true)
 		}
 		// One discrete stepper move per command on each wheel.
-		frames = append(frames, motorFrame(idLMotor, ld, stepsPerMove), motorFrame(idRMotor, rd, stepsPerMove))
+		steps := moveSteps(body.Cmd)
+		frames = append(frames, motorFrame(idLMotor, ld, steps), motorFrame(idRMotor, rd, steps))
 	}
 
 	if sendDrive(frames) {

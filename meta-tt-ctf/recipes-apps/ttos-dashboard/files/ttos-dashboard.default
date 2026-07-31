@@ -12,3 +12,8 @@ TTOS_DASH_IFACES=can0,can1
 # the control buttons validate + log but do not transmit. Set to "can0" to enable
 # live driving (control phase).
 TTOS_DASH_DRIVE=
+
+# Stepper steps per motion command (each button press / hold-repeat). Tune per car:
+# straight moves and turns are separate (turns tend to over-rotate). Default 255/128.
+TTOS_DASH_STEPS=255
+TTOS_DASH_TURN_STEPS=128
