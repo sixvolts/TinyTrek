@@ -7,11 +7,12 @@ int statusId = 0x116;      // TX: battery telemetry (Vbat millivolts, uint16 big
 // --- Battery sense (A1) ------------------------------------------------------
 // 120k high-side / 40.2k low-side divider (0.5%), fed to A1.
 //   Vadc = Vbat * 40.2 / (120 + 40.2)  ->  Vbat = Vadc * (160.2 / 40.2) = Vadc * 3.985
-// ADC_REF_MV is the analog reference: 5000 for a 5V board (Arduino UNO), 3300 for 3.3V.
-// >>> CONFIRM ADC_REF_MV for the actual BMS board. <<<
+// ADC_REF_MV is the analog reference in millivolts. The node is a 3.3V board
+// (RP2040 / Feather RP2040 CAN), and Arduino analogRead defaults to 10-bit.
+// Fine-tune ADC_REF_MV against a multimeter reading if the gauge is slightly off.
 const int   BATT_PIN    = A1;
-const long  ADC_REF_MV  = 5000;   // 5V board (Arduino UNO). 3.3V board -> 3300.
-const int   ADC_MAX     = 1023;   // 10-bit ADC
+const long  ADC_REF_MV  = 3300;   // 3.3V board (RP2040). 5V board (UNO) -> 5000.
+const int   ADC_MAX     = 1023;   // 10-bit analogRead default
 const float DIVIDER     = (120.0 + 40.2) / 40.2;  // = 3.985
 const unsigned long TELEM_MS = 1000;              // telemetry period (~1 Hz)
 
