@@ -13,6 +13,7 @@ package main
 
 import (
 	"embed"
+	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,7 +45,9 @@ func main() {
 	ethIf := flag.String("eth", envOr("TTOS_DASH_ETH_IF", "eth0"), "interface for the Ethernet indicator")
 	demo := flag.Bool("demo", false, "synthesize battery/sensor indicators (arcana mock)")
 	driveIf := flag.String("drive", os.Getenv("TTOS_DASH_DRIVE"), "CAN interface to SEND control frames on (empty = read-only)")
+	steps := flag.Uint("steps", uint(envInt("TTOS_DASH_STEPS", 255)), "stepper steps per motion command")
 	flag.Parse()
+	stepsPerMove = uint32(*steps)
 
 	ifaces := splitClean(*ifacesArg)
 	if len(ifaces) == 0 {
@@ -138,33 +142,29 @@ func readLoop(ifc string) {
 	}
 }
 
-// ---- 12V / motion state ---------------------------------------------------
+// ---- 12V power state -------------------------------------------------------
 //
-// The 12V rail is "active" while the car has motion enabled -- a key element of
-// the challenges. Here it is driven by the control stub: a motion command arms it
-// for a short window, STOP clears it. Real telemetry will drive this later.
+// The BMS (0x115) toggles the 12V rail that powers the motor drivers -- a
+// persistent commanded state (on until turned off), and a key element of the
+// challenges. We track it directly; the 12V ACTIVE indicator reflects it. A motion
+// command powers on if needed; STOP powers off (a true e-stop, since the steppers
+// already halt after each move).
 
-var motion = struct {
+var power = struct {
 	sync.Mutex
-	until time.Time
+	on bool
 }{}
 
-func armMotion() {
-	motion.Lock()
-	motion.until = time.Now().Add(4 * time.Second)
-	motion.Unlock()
+func setPower(on bool) {
+	power.Lock()
+	power.on = on
+	power.Unlock()
 }
 
-func clearMotion() {
-	motion.Lock()
-	motion.until = time.Time{}
-	motion.Unlock()
-}
-
-func motionActive() bool {
-	motion.Lock()
-	defer motion.Unlock()
-	return time.Now().Before(motion.until)
+func powerOn() bool {
+	power.Lock()
+	defer power.Unlock()
+	return power.on
 }
 
 // ---- indicators -----------------------------------------------------------
@@ -193,7 +193,7 @@ func gatherStatus(wifiIf, ethIf string, demo bool) statusEvent {
 	s.WiFi = linkState(wifiIf)
 	s.Eth = linkState(ethIf)
 	s.V12 = "inactive"
-	if motionActive() {
+	if powerOn() {
 		s.V12 = "active"
 	}
 	if demo {
@@ -234,21 +234,24 @@ var controlCmds = map[string]bool{
 
 // TinyTrek reused protocol (from the public repo firmware -- no firmware change):
 //
-//	0x111 = left motor, 0x113 = right motor: [_,_,_,speed,dir]
-//	        speed 0xFF = full, 0x00 = stop; dir 0x01 = fwd, 0x02 = rev
-//	0x115 = BMS power: [0x01] = on (12V), [0x02] = off
+//	0x111 = left motor, 0x113 = right motor: [steps:uint32 big-endian][dir]
+//	        the node moves <steps> steps then stops (stepper, blocking).
+//	        dir 0x02 = reverse, anything else = forward.
+//	0x115 = BMS power: [0x01] = 12V rail on, [0x02] = off
 const (
 	idLMotor = 0x111
 	idRMotor = 0x113
 	idBMS    = 0x115
 )
 
-func motorFrame(id uint32, dir byte, moving bool) canbus.Frame {
-	speed := byte(0xFF)
-	if !moving {
-		speed = 0x00
-	}
-	return canbus.Frame{ID: id, Data: []byte{0, 0, 0, speed, dir}}
+// stepsPerMove is how far each motion command advances a wheel (set from -steps).
+var stepsPerMove uint32 = 255
+
+func motorFrame(id uint32, dir byte, steps uint32) canbus.Frame {
+	data := make([]byte, 5)
+	binary.BigEndian.PutUint32(data[0:4], steps)
+	data[4] = dir
+	return canbus.Frame{ID: id, Data: data}
 }
 
 func bmsFrame(on bool) canbus.Frame {
@@ -288,17 +291,18 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ld, rd := cmdMotors(body.Cmd)
 	var frames []canbus.Frame
 	if body.Cmd == "stop" {
-		clearMotion()
-		frames = []canbus.Frame{motorFrame(idLMotor, ld, false), motorFrame(idRMotor, rd, false), bmsFrame(false)}
+		setPower(false)
+		frames = []canbus.Frame{bmsFrame(false)} // cut the 12V rail -- e-stop
 	} else {
-		if !motionActive() {
-			frames = append(frames, bmsFrame(true)) // power on (12V) when starting from rest
+		ld, rd := cmdMotors(body.Cmd)
+		if !powerOn() {
+			frames = append(frames, bmsFrame(true)) // 12V rail on before moving
+			setPower(true)
 		}
-		armMotion()
-		frames = append(frames, motorFrame(idLMotor, ld, true), motorFrame(idRMotor, rd, true))
+		// One discrete stepper move per command on each wheel.
+		frames = append(frames, motorFrame(idLMotor, ld, stepsPerMove), motorFrame(idRMotor, rd, stepsPerMove))
 	}
 
 	if sendDrive(frames) {
@@ -430,6 +434,15 @@ func envOr(key, def string) string {
 }
 
 func nowSec() float64 { return float64(time.Now().UnixNano()) / 1e9 }
+
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
 
 func splitClean(s string) []string {
 	var out []string
