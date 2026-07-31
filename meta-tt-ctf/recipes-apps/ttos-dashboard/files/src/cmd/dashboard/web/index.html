@@ -318,6 +318,7 @@
       return `${node} · ${dir===2?'rev':'fwd'} ${steps} steps`;
     }
     if(id==='115'){ const p=d[0]||0; return p===1?'BMS · power ON (12V)':p===2?'BMS · power OFF':'BMS'; }
+    if(id==='116'){ const mv=((d[0]||0)<<8)+(d[1]||0); return `BMS · battery ${(mv/1000).toFixed(2)} V`; }
     return '';
   }
   function hms(d){return d.toLocaleTimeString('en-GB',{hour12:false})+'.'+String(d.getMilliseconds()).padStart(3,'0');}

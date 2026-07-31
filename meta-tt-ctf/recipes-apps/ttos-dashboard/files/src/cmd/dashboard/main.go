@@ -47,9 +47,14 @@ func main() {
 	driveIf := flag.String("drive", os.Getenv("TTOS_DASH_DRIVE"), "CAN interface to SEND control frames on (empty = read-only)")
 	steps := flag.Uint("steps", uint(envInt("TTOS_DASH_STEPS", 255)), "stepper steps per straight move")
 	turns := flag.Uint("turnsteps", uint(envInt("TTOS_DASH_TURN_STEPS", 128)), "stepper steps per turn/rotate")
+	battID := flag.Uint("battid", uint(envInt("TTOS_DASH_BATT_ID", 0x116)), "CAN ID of BMS battery telemetry")
+	battMin := flag.Int("battmin", envInt("TTOS_DASH_BATT_MIN_MV", 9000), "battery millivolts at 0%")
+	battMax := flag.Int("battmax", envInt("TTOS_DASH_BATT_MAX_MV", 12600), "battery millivolts at 100%")
 	flag.Parse()
 	stepsPerMove = uint32(*steps)
 	turnSteps = uint32(*turns)
+	battTelemID = uint32(*battID)
+	battMinMv, battMaxMv = *battMin, *battMax
 
 	ifaces := splitClean(*ifacesArg)
 	if len(ifaces) == 0 {
@@ -138,6 +143,7 @@ func readLoop(ifc string) {
 				conn.Close()
 				break
 			}
+			recordBattery(f)
 			publishFrame(f)
 		}
 		time.Sleep(time.Second)
@@ -169,6 +175,51 @@ func powerOn() bool {
 	return power.on
 }
 
+// ---- battery telemetry -----------------------------------------------------
+//
+// The BMS transmits Vbat (millivolts, uint16 big-endian) on battTelemID. We map
+// it to a percentage between battMinMv (0%) and battMaxMv (100%). Defaults suit a
+// ~12V (M12-style) pack; tune via -battmin/-battmax (env TTOS_DASH_BATT_*).
+
+var (
+	battTelemID uint32 = 0x116
+	battMinMv          = 9000  // 0%
+	battMaxMv          = 12600 // 100%
+)
+
+var battery = struct {
+	sync.Mutex
+	mv   int
+	when time.Time
+}{}
+
+func recordBattery(f canbus.Frame) {
+	if f.ID != battTelemID || len(f.Data) < 2 {
+		return
+	}
+	mv := int(f.Data[0])<<8 | int(f.Data[1])
+	battery.Lock()
+	battery.mv, battery.when = mv, time.Now()
+	battery.Unlock()
+}
+
+// batteryPct returns the charge percent, or nil if there is no recent reading.
+func batteryPct() *int {
+	battery.Lock()
+	mv, when := battery.mv, battery.when
+	battery.Unlock()
+	if mv == 0 || time.Since(when) > 5*time.Second || battMaxMv <= battMinMv {
+		return nil
+	}
+	p := (mv - battMinMv) * 100 / (battMaxMv - battMinMv)
+	if p < 0 {
+		p = 0
+	} else if p > 100 {
+		p = 100
+	}
+	return &p
+}
+
 // ---- indicators -----------------------------------------------------------
 
 type statusEvent struct {
@@ -198,6 +249,7 @@ func gatherStatus(wifiIf, ethIf string, demo bool) statusEvent {
 	if powerOn() {
 		s.V12 = "active"
 	}
+	s.Battery = batteryPct() // real BMS telemetry (nil if none); demo overrides below
 	if demo {
 		// A slowly-varying battery and offline sensors, matching the sketch, so the
 		// arcana mock shows a fully populated panel. Real sources are wired later.
