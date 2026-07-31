@@ -16,7 +16,14 @@ const int   ADC_MAX     = 1023;   // 10-bit analogRead default
 const float DIVIDER     = (120.0 + 40.2) / 40.2;  // = 3.985
 const unsigned long TELEM_MS = 1000;              // telemetry period (~1 Hz)
 
+// --- Low-voltage cutoff (protect a 3S pack) ---------------------------------
+// Below CUTOFF the 12V rail is forced off; it stays locked out until the pack
+// recovers above RECOVER (hysteresis stops it chattering near the threshold).
+const long LVC_CUTOFF_MV  = 8500;  // cut 12V just above 0% (8.4V)
+const long LVC_RECOVER_MV = 9000;  // re-allow power on above this
+
 unsigned long lastTelem = 0;
+bool lvcLockout = false;
 
 void setup() {
   Serial.begin(115200);
@@ -36,6 +43,18 @@ void setup() {
   powerOff();
 }
 
+// readVbatMv averages a few samples to steady the reading.
+long readVbatMv() {
+  long acc = 0;
+  for (int i = 0; i < 8; i++) acc += analogRead(BATT_PIN);
+  long adc = acc / 8;
+  long vadcMv = adc * ADC_REF_MV / ADC_MAX;      // millivolts at A1
+  long vbatMv = (long)(vadcMv * DIVIDER + 0.5);  // millivolts at the pack
+  if (vbatMv < 0) vbatMv = 0;
+  if (vbatMv > 65535) vbatMv = 65535;
+  return vbatMv;
+}
+
 void loop() {
   int packetSize = CAN.parsePacket();
 
@@ -44,23 +63,27 @@ void loop() {
     CAN.readBytes(buf, CAN.packetDlc());
 
     if(buf[0] == 0x1) {
-      powerOn();
+      if(!lvcLockout) powerOn();   // refuse power-on while the pack is too low
     } else if(buf[0] == 0x2) {
       powerOff();
     }
   }
 
-  // Periodic battery telemetry.
+  // Read the pack every loop for a responsive low-voltage cutoff.
+  long vbatMv = readVbatMv();
+  if (vbatMv < LVC_CUTOFF_MV) {
+    lvcLockout = true;
+    powerOff();
+  } else if (vbatMv > LVC_RECOVER_MV) {
+    lvcLockout = false;
+  }
+
+  // Transmit battery telemetry at ~1 Hz.
   if (millis() - lastTelem >= TELEM_MS) {
     lastTelem = millis();
-    long adc = analogRead(BATT_PIN);
-    long vadcMv = adc * ADC_REF_MV / ADC_MAX;      // millivolts at A1
-    long vbatMv = (long)(vadcMv * DIVIDER + 0.5);  // millivolts at the pack
-    if (vbatMv < 0) vbatMv = 0;
-    if (vbatMv > 65535) vbatMv = 65535;
     CAN.beginPacket(statusId);
-    CAN.write((vbatMv >> 8) & 0xFF);               // high byte
-    CAN.write(vbatMv & 0xFF);                      // low byte
+    CAN.write((vbatMv >> 8) & 0xFF);   // high byte
+    CAN.write(vbatMv & 0xFF);          // low byte
     CAN.endPacket();
   }
 }

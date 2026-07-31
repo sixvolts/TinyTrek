@@ -19,7 +19,7 @@ TTOS_DASH_STEPS=255
 TTOS_DASH_TURN_STEPS=128
 
 # Battery gauge: the BMS transmits Vbat (mV, uint16 BE) on this CAN ID; the gauge
-# maps battmin..battmax mV to 0..100%. Defaults suit a ~12V (M12) pack.
+# maps battmin..battmax mV to 0..100%. 3S pack: 2.8 V/cell (8.4 V) 0% .. 4.1 V/cell (12.3 V) 100%.
 TTOS_DASH_BATT_ID=0x116
-TTOS_DASH_BATT_MIN_MV=9000
-TTOS_DASH_BATT_MAX_MV=12600
+TTOS_DASH_BATT_MIN_MV=8400
+TTOS_DASH_BATT_MAX_MV=12300

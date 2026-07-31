@@ -48,8 +48,8 @@ func main() {
 	steps := flag.Uint("steps", uint(envInt("TTOS_DASH_STEPS", 255)), "stepper steps per straight move")
 	turns := flag.Uint("turnsteps", uint(envInt("TTOS_DASH_TURN_STEPS", 128)), "stepper steps per turn/rotate")
 	battID := flag.Uint("battid", uint(envInt("TTOS_DASH_BATT_ID", 0x116)), "CAN ID of BMS battery telemetry")
-	battMin := flag.Int("battmin", envInt("TTOS_DASH_BATT_MIN_MV", 9000), "battery millivolts at 0%")
-	battMax := flag.Int("battmax", envInt("TTOS_DASH_BATT_MAX_MV", 12600), "battery millivolts at 100%")
+	battMin := flag.Int("battmin", envInt("TTOS_DASH_BATT_MIN_MV", 8400), "battery millivolts at 0%")
+	battMax := flag.Int("battmax", envInt("TTOS_DASH_BATT_MAX_MV", 12300), "battery millivolts at 100%")
 	flag.Parse()
 	stepsPerMove = uint32(*steps)
 	turnSteps = uint32(*turns)
@@ -183,8 +183,8 @@ func powerOn() bool {
 
 var (
 	battTelemID uint32 = 0x116
-	battMinMv          = 9000  // 0%
-	battMaxMv          = 12600 // 100%
+	battMinMv          = 8400  // 0%   = 2.8 V/cell x3
+	battMaxMv          = 12300 // 100% = 4.1 V/cell x3
 )
 
 var battery = struct {
