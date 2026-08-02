@@ -36,8 +36,23 @@ TTOS_DASH_DRIVE=
 # between frames, so the buffer fills to the cap and rides a couple of missed
 # frames; release/stop clears it. Bigger STEP_CHUNK/STEPS_MAX = smoother through
 # loss but longer coast if a release is missed.
+#
+# DO NOT LOWER THESE TO ~40-70 RPM "to be gentler". At 200 full steps/rev and no
+# microstepping, rpm maps to step rate as rpm/60*200:
+#     100 rpm -> 333 steps/s      50 rpm -> 167 steps/s
+# 167 steps/s sits in the steppers' MID-BAND RESONANCE region (~100-200 pps in full
+# step). The rotor oscillates about each detent instead of settling: it grinds
+# audibly, torque collapses, and it drops steps -- so it runs slower than commanded
+# on top of the intended reduction. Turns ran at 50 until 2026-08-02 and sounded
+# like they were tearing themselves apart; 100 is clean. Tune UPWARD from here.
+#
+# The textbook fix is microstepping on the driver, but that would break Challenge 1:
+# the 102-step 45-degree pivot is derived from 200 full steps/rev, and at 1/8
+# microstepping the same arc needs 816 steps -- past the firmware's STEPS_MAX of 250,
+# which violates the "pivot is always one command per wheel" rule. Re-derive
+# TTOS_PIVOT_STEPS and STEPS_MAX first if you ever enable it.
 TTOS_DASH_RPM=100
-TTOS_DASH_TURN_RPM=50
+TTOS_DASH_TURN_RPM=100
 TTOS_DASH_KEEPALIVE_MS=150
 TTOS_DASH_STEP_CHUNK=100
 

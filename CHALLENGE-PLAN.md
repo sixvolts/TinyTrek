@@ -412,8 +412,19 @@ so nobody calls a correct-but-different forgery a failure.
 
 ## J. Known risk carried in from the baseline
 
-The **left motor stutter** (SYSTEM-OVERVIEW §10) is still unexplained and suspected to
-be node/wiring. Phase 3 adds *silent* CRC rejection to motor firmware — a frame-level
-fault will then present as identical silence. Recommend resolving the stutter, or at
-minimum confirming it is not frame corruption, **before** the Phase 3 firmware freeze.
-The status LEDs added last session should localise it on the next bench run.
+The **motor stutter** is still unexplained. Phase 3 adds *silent* CRC rejection to
+motor firmware — a frame-level fault will then present as identical silence.
+Recommend resolving it, or at minimum confirming it is not frame corruption,
+**before** the Phase 3 firmware freeze.
+
+Narrowed on 2026-08-02, two causes found and excluded:
+
+- **Turn "grinding" was mid-band resonance, not the stutter.** Turns ran at 50 rpm
+  = 167 steps/s, inside the ~100–200 pps full-step resonance band. Raising
+  `TTOS_DASH_TURN_RPM` to 100 removed the noise entirely. **The stutter survives at
+  100 rpm**, so it is a separate fault and resonance is ruled out.
+- **A dead CAN controller can masquerade as a motor fault.** A node whose
+  `CAN.begin()` failed sits in configuration mode — electrically passive, so the bus
+  looks healthy from the Pi (another node ACKs, error counters stay zero) while that
+  node hears nothing. Fixed in firmware (settle + retry); the new **blue** LED states
+  make it visible. Check LEDs before suspecting the drivetrain.
