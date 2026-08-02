@@ -29,18 +29,22 @@ Two buses, and **the naming is inverted relative to the original design doc**:
 
 | Interface | Config | What is actually on it |
 |---|---|---|
-| `can0` | Classic CAN 2.0, 500 kbit | **Nothing.** No nodes. Writes fail `ENOBUFS` (no ACK). Intended as the "internal" bus; the harness isn't wired here. |
-| `can1` | **CAN FD**, 500 kbit arbitration / 1 Mbit data | **The real drive bus** — both motors + BMS. Verified 2026-08-01. |
+| `can0` | **CAN FD**, 500 kbit arbitration / 1 Mbit data | **DIAG bus.** No permanent nodes — terminates at the contestant side tap. Writes fail `ENOBUFS` until an adapter is plugged in (a lone node gets no ACK), which is correct for a diagnostic port. |
+| `can1` | **Classic CAN 2.0, 500 kbit** | **DRIVE bus** — both motors + BMS. Verified 2026-08-01. |
 
 **Consequences for challenge design:**
 
 - Anything that drives the car must use **`can1`**. `TTOS_DASH_DRIVE=can1`.
-- ⚠️ **`can1` has `FDMode=yes` but its nodes are classic-only (MCP2515).** Classic
-  frames work fine (arbitration is 500 kbit either way — this is how the car drives
-  today). But if anything transmits a genuine **CAN FD** frame on `can1`, the MCP2515
-  nodes will see a form error and can go error-passive → bus-off. A challenge that
-  injects FD frames would break propulsion. Treat as a hazard, or as a deliberate
-  challenge mechanic — but decide consciously.
+- **The DRIVE bus is classic CAN 2.0 and must stay that way.** Every node on it is
+  classic-only — the motor nodes are MCP2515, which has no FD support at all. An FD
+  frame there is a form error: the nodes go error-passive, then bus-off, and
+  propulsion stops. `can1` was briefly configured `FDMode=yes` with a 1 Mbit data
+  rate, which bought nothing (no node could use it) while leaving the Pi able to
+  transmit a frame that would take the drivetrain offline. Removed 2026-08-02 — with
+  FD off, the controller **cannot** emit one even by mistake. `ttos-selftest` fails
+  if `can1` ever comes up in FD mode again.
+- The gateway still forwards classic frames only (no `-X`), which is now redundant
+  protection rather than the sole line of defence.
 - Interface naming is pinned by `10-can0.link` / `10-can1.link` (matching SPI paths
   `platform-fe204000.spi*` → `can0`, `platform-fe215080.spi*` → `can1`) so names are
   stable across boots. Swapping those two `Path=` tokens would rename the buses if

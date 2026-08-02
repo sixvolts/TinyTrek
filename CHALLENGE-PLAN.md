@@ -13,7 +13,7 @@ disagree, raised rather than guessed per §0.
 |---|---|
 | `socketcand` bridges both buses (`-i can0,can1`) | ✅ confirmed — now **removed entirely** (§C) |
 | `can0` is classic 500k, needs `FDMode=yes` + `DataBitRate=` | ✅ confirmed, `can0.network` — a 2-line edit |
-| `can1` is already FD-configured | ✅ confirmed, `can1.network` |
+| `can1` is already FD-configured | ✅ was true — **now deliberately reverted to classic 2.0.** The brief's §2 table lists the DRIVE bus as `FDMode=yes`; that config bought nothing (no node on it can speak FD) and left the Pi able to emit a frame that bus-offs the motor nodes. Classic removes the hazard at source instead of documenting it. Decided 2026-08-02. |
 | Drive frame is 6 bytes, unauthenticated | ✅ confirmed |
 | Heartbeat `0x100` only transmits when the drive gate is set | ✅ confirmed, `main.go:544` |
 | Dashboard SSE carries decoded frames for both buses | ✅ confirmed |
@@ -254,6 +254,10 @@ away from a good baseline fix. Commit as-is, tag `baseline-v1`, then start.
   bus only.
 
 ### Phase 1 — gateway + CTF service skeleton
+- `can1.network`: **drop** `FDMode=`/`DataBitRate=` — the DRIVE bus is classic 2.0
+  500k. Nothing on it can use FD, and leaving FD enabled let the Pi transmit a frame
+  that would drive the MCP2515 motor nodes to bus-off. `ttos-selftest` now fails if
+  `can1` comes up in FD mode.
 - `can0.network`: `FDMode=yes`, `DataBitRate=1000000`. Fix the misleading comments in
   both `.network` files — they still describe the pre-2026-08-01 (inverted) roles.
 - `ttos-cangw.service`: default policy DRIVE→DIAG for `0x7D1`/`0x7D2` only, nothing

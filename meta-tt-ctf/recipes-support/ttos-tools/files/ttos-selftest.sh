@@ -10,6 +10,26 @@
 #
 # Exit code 0 = no failures. SKIP means "needs a second machine / manual check".
 
+# iproute2's `ip` and `iw` live in /sbin, which is NOT in the ttos user's PATH.
+# Without this every interface check reports "does not exist" -- on a car whose
+# interfaces are demonstrably up. Set before anything else runs.
+PATH="/sbin:/usr/sbin:$PATH"
+export PATH
+
+# Nearly every check here needs root. Run without it and the output is a page of
+# false failures (can0/can1 "missing", wlan0 with no address, no ethernet), which
+# is far worse than refusing to run: it teaches whoever is holding the car to
+# ignore the tool. Re-exec once under sudo instead -- one password prompt at most,
+# rather than one per privileged command.
+if [ "$(id -u)" != 0 ]; then
+    if command -v sudo >/dev/null 2>&1; then
+        exec sudo -- "$0" "$@"
+    fi
+    printf '\n*** NOT RUNNING AS ROOT and sudo is unavailable. ***\n'
+    printf '    Interface, gateway and account checks will report FALSE FAILURES.\n'
+    printf '    Re-run as: sudo %s\n\n' "$0"
+fi
+
 LOOPBACK=0
 [ "${1:-}" = "--loopback" ] && LOOPBACK=1
 
@@ -74,11 +94,15 @@ else no "mcp251xfd: no controllers probed (check HAT seating, overlays, SPI)"; f
 [ -n "$DM" ] && printf '%s\n' "$DM" | tail -n 4 | sed 's/^/         /'
 
 # ---------------------------------------------------------------------------
-# Both buses run CAN FD at 500k arbitration / 1 Mbit data since CTF phase 1: can0
-# (DIAG) was switched from classic so a routine can return a flag in one 64-byte
-# response with no ISO-TP. Role names, not numbers -- DRIVE is the HIGHER-numbered
-# interface here (can1), which is the opposite of the original design doc.
-hdr "4. CAN interfaces  (DRIVE=can1 and DIAG=can0, both FD 500k/1M)"
+# Role names, not numbers -- DRIVE is the HIGHER-numbered interface here (can1),
+# the opposite of the original design doc.
+#   DIAG  can0  CAN FD, 500k/1M  -- 64-byte diagnostic responses, no ISO-TP needed.
+#                                   Only contestant test adapters live here.
+#   DRIVE can1  CLASSIC 2.0, 500k -- every node on it is classic-only (the motor
+#                                   nodes are MCP2515, no FD support whatsoever).
+# can1 must NOT report FD: an FD frame is a form error to those nodes and takes the
+# drivetrain to bus-off. Keeping FD off means the controller cannot emit one.
+hdr "4. CAN interfaces  (DIAG=can0 FD 500k/1M; DRIVE=can1 classic 500k)"
 check_can(){ # $1=iface  $2=expect_fd(0/1)
     ifc=$1; fd=$2
     if ! ip link show "$ifc" >/dev/null 2>&1; then no "$ifc does not exist"; return; fi
@@ -92,34 +116,62 @@ check_can(){ # $1=iface  $2=expect_fd(0/1)
     if ip link show "$ifc" 2>/dev/null | head -n 1 | grep -qE '[<,]UP[,>]'; then ok "$ifc is UP"
     else no "$ifc is DOWN (should come up automatically at boot)"; fi
     [ "$BR" = "500000" ] && ok "$ifc arbitration bitrate = 500000" || no "$ifc bitrate = ${BR:-?} (expected 500000)"
+    # 'dbitrate' appears only on an FD-configured interface. Use that rather than
+    # grepping for "fd": the driver name mcp251xfd contains those letters, so a
+    # loose match reports a classic interface as FD.
+    DBR=$(echo "$D" | grep -o 'dbitrate [0-9]*' | awk '{print $2}')
     if [ "$fd" = "1" ]; then
-        DBR=$(echo "$D" | grep -o 'dbitrate [0-9]*' | awk '{print $2}')
-        echo "$D" | grep -qi '\<fd\>\|FD' && ok "$ifc is CAN FD" || no "$ifc is not in FD mode"
+        [ -n "$DBR" ] && ok "$ifc is CAN FD" || no "$ifc is not in FD mode"
         [ "$DBR" = "1000000" ] && ok "$ifc data bitrate = 1000000" || no "$ifc dbitrate = ${DBR:-?} (expected 1000000)"
+    else
+        # Asserting the ABSENCE of FD matters more than asserting its presence:
+        # the motor nodes are classic-only MCP2515, so an FD frame on this bus is a
+        # form error that drives them error-passive and then bus-off, stopping
+        # propulsion. Configuring the bus classic means the controller cannot emit
+        # one at all.
+        if [ -n "$DBR" ]; then
+            no "$ifc is in FD mode (dbitrate $DBR) -- the DRIVE bus must be CLASSIC; FD frames bus-off the MCP2515 nodes"
+        else
+            ok "$ifc is classic CAN 2.0 (correct for the drive bus)"
+        fi
     fi
     [ "$STATE" = "ERROR-ACTIVE" ] && ok "$ifc state ERROR-ACTIVE" || sk "$ifc state = ${STATE:-?} (ERROR-ACTIVE needs a wired, terminated bus)"
 }
-check_can can0 1
-check_can can1 1
+check_can can0 1   # DIAG: must be FD
+check_can can1 0   # DRIVE: must be classic -- FD here would bus-off the motor nodes
 
 # ---------------------------------------------------------------------------
 hdr "5. cangw gateway  (§4.1 go/no-go: cangw -L works, a rule takes effect)"
 if have cangw; then
-    # Test cangw -L by whether it PRODUCES A LISTING, not by exit status: it returns
-    # non-zero even on success, which reported a working gateway as broken on every
-    # car. Confirmed 2026-08-02 -- section 12 counted 2 live rules from this same
-    # command while this check called it a failure.
-    if $SUDO cangw -L 2>/dev/null | grep -q 'cangw' || $SUDO cangw -L >/dev/null 2>&1; then
+    # Judge cangw -L by whether it PRODUCES A LISTING, not by exit status: it exits
+    # non-zero even on success (measured: 36 while listing both rules), so the old
+    # check reported a working gateway as broken on every car.
+    GWL=$($SUDO cangw -L 2>/dev/null)
+    if [ -n "$GWL" ]; then
         ok "cangw -L runs"
-        if ip link show can0 >/dev/null 2>&1 && ip link show can1 >/dev/null 2>&1; then
-            $SUDO cangw -A -s can0 -d can1 -e >/dev/null 2>&1
-            if $SUDO cangw -L 2>/dev/null | grep -q 'can0.*can1'; then
-                ok "cangw forwarding rule can0->can1 installed"
-            else no "cangw rule did not take effect"; fi
-            $SUDO cangw -F >/dev/null 2>&1  # flush test rule
-            info "test rule flushed"
-        else sk "can0/can1 not both present -- skipping live rule test"; fi
-    else no "cangw -L failed (is CONFIG_CAN_GW in the running kernel?)"; fi
+        # NON-DESTRUCTIVE. The previous version added a test rule and then ran
+        # `cangw -F`, which flushes EVERY rule -- so running the self-test on a live
+        # car silently disabled the DRIVE/DIAG gateway until the next reboot. That
+        # only stayed hidden because the broken exit-status test above bailed out
+        # before reaching it. Verify the SHIPPED policy instead of mutating it.
+        for gwid in 7D1 7D2; do
+            if echo "$GWL" | grep -q -- "-s can1 -d can0 -f ${gwid}:"; then
+                ok "gateway rule present: DRIVE(can1) -> DIAG(can0) ${gwid}"
+            else
+                no "gateway rule MISSING: can1 -> can0 ${gwid} (is ttos-cangw.service running?)"
+            fi
+        done
+        # Nothing may be forwarded toward the vehicle bus in the default policy --
+        # an inbound rule here would hand contestants the drive bus.
+        if echo "$GWL" | grep -q -- '-s can0 -d can1'; then
+            no "INBOUND rule can0 -> can1 present -- nothing should reach the drive bus"
+        else
+            ok "no inbound DIAG -> DRIVE forwarding (correct default policy)"
+        fi
+    else
+        no "cangw -L listed nothing (policy not applied, or CONFIG_CAN_GW missing)"
+        info "restore with: sudo ttos-cangw-policy default"
+    fi
 else no "cangw binary missing (can-utils not installed?)"; fi
 
 # ---------------------------------------------------------------------------
