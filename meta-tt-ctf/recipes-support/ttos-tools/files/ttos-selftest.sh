@@ -228,6 +228,53 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# CTF PRE-EVENT GATE. Everything above answers "does this car work?". This block
+# answers "is this car safe to put in front of contestants?" -- a different and
+# stricter question. Run it on every car before the doors open.
+hdr "12. CTF pre-event gate  (run before a car goes on the floor)"
+
+# Factory mode is a total bypass: open AP, no PSK, driving enabled, console
+# ttos/ttos. A car that reaches the venue unprovisioned is a free win AND an open
+# network. This is the single most important check in the script.
+if [ -e /etc/ttos/factory ]; then
+    no "FACTORY/TEST MODE ACTIVE -- open AP, no password, driving enabled. DO NOT DEPLOY."
+    info "provision this car (drop ttos-provision.conf on the FAT partition and reboot)"
+else
+    ok "not in factory/test mode"
+fi
+
+case "$VARIANT" in
+    *production*) ok "production image (bench images have an empty root password)" ;;
+    *) no "NOT the production image -- do not put this car on the floor" ;;
+esac
+
+# socketcand was removed 2026-08-02: it bridged both CAN buses to TCP 29536 with no
+# authentication, which bypassed every challenge. If it is somehow back, it must not
+# ship. (Also note it cannot work without a physical tap to ACK -- see the plan §C.)
+if have socketcand || systemctl list-unit-files 2>/dev/null | grep -q '^socketcand'; then
+    no "socketcand is present -- it must not ship on a competition car"
+else
+    ok "socketcand absent (diagnostic access is the physical tap only)"
+fi
+
+# The kernel gateway is the whole basis of the DRIVE/DIAG separation.
+if have cangw; then
+    ok "cangw available"
+    RULES=$($SUDO cangw -L 2>/dev/null | grep -c 'cangw -A' || true)
+    info "active gateway rules: ${RULES:-0}"
+else
+    no "cangw missing -- gateway policy cannot be applied (CONFIG_CAN_GW / can-utils)"
+fi
+
+# Raw frame views must be gated, or a locked panel leaks the C2 corpus.
+DASHFRAMES=$(sed -n 's/^TTOS_DASH_FRAMES=//p' /etc/default/ttos-dashboard 2>/dev/null | head -n 1)
+if [ -z "$DASHFRAMES" ]; then
+    ok "dashboard raw frame streaming disabled (TTOS_DASH_FRAMES empty)"
+else
+    no "TTOS_DASH_FRAMES=$DASHFRAMES -- the panel will stream raw frames to anyone"
+fi
+
+# ---------------------------------------------------------------------------
 hdr "Summary"
 printf "  ${G}PASS %d${N}   ${R}FAIL %d${N}   ${Y}SKIP %d${N}\n" "$PASS" "$FAIL" "$SKIP"
 printf "  SKIP items need a second machine or manual verification (see notes above).\n"

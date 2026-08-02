@@ -8,6 +8,14 @@ TTOS_DASH_ADDR=192.168.244.1:80
 # Comma-separated CAN interfaces to monitor.
 TTOS_DASH_IFACES=can0,can1
 
+# Comma-separated CAN interfaces whose RAW FRAMES may be streamed to the UI.
+# EMPTY = none, and that is correct for a competition car: a locked panel showing
+# live DRIVE-bus traffic hands contestants the C2 corpus by passive sniffing, which
+# defeats the gateway policy. The bus tabs are not drawn at all when this is empty.
+# Set to can0,can1 on a bench image when you want the frame view back.
+# Phase 5 replaces this all-or-nothing gate with per-session unlock tiers.
+TTOS_DASH_FRAMES=
+
 # Interface to SEND control frames on (the drive bus). EMPTY = read-only: the
 # control buttons validate + log but do not transmit.
 #

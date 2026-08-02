@@ -53,6 +53,7 @@ func main() {
 	battMin := flag.Int("battmin", envInt("TTOS_DASH_BATT_MIN_MV", 8400), "battery millivolts at 0% (resting/open-circuit)")
 	battMax := flag.Int("battmax", envInt("TTOS_DASH_BATT_MAX_MV", 12300), "battery millivolts at 100% (resting/open-circuit)")
 	battLoad := flag.Int("battload", envInt("TTOS_DASH_BATT_LOAD_OFFSET_MV", 1000), "mV added to the measured (loaded) reading to estimate resting voltage; ~= the steady droop under the Pi load")
+	framesArg := flag.String("frames", os.Getenv("TTOS_DASH_FRAMES"), "comma-separated CAN interfaces whose raw frames may be streamed to the UI (empty = none; see frameAllow)")
 	flag.Parse()
 	straightRPM = uint32(*rpmStraight)
 	turnRPM = uint32(*rpmTurn)
@@ -65,6 +66,14 @@ func main() {
 	ifaces := splitClean(*ifacesArg)
 	if len(ifaces) == 0 {
 		log.Fatal("no CAN interfaces configured")
+	}
+
+	frameIfaces := splitClean(*framesArg)
+	if frameIfaces == nil {
+		frameIfaces = []string{} // marshal as [], not null
+	}
+	for _, s := range frameIfaces {
+		frameAllow[s] = true
 	}
 
 	go hub.Run()
@@ -99,7 +108,13 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/events", serveEvents)
 	mux.HandleFunc("/api/info", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"ifaces": ifaces, "car": carInfo(), "repeatMs": repeatMs})
+		// "frames" tells the UI which bus tabs are worth drawing. Without it the UI
+		// would render tabs that sit permanently on "Waiting for frames...", which
+		// reads as a broken panel rather than a locked one.
+		writeJSON(w, map[string]any{
+			"ifaces": ifaces, "frames": frameIfaces,
+			"car": carInfo(), "repeatMs": repeatMs,
+		})
 	})
 	mux.HandleFunc("/api/control", handleControl)
 	mux.Handle("/", uiHandler(*webdir))
@@ -130,7 +145,21 @@ func publish(v any) {
 	}
 }
 
+// frameAllow lists the interfaces whose raw frames may be streamed to the UI.
+// EMPTY BY DEFAULT on a competition car (CTF Phase 0): a locked panel showing live
+// DRIVE-bus traffic would hand contestants the C2 corpus by passive sniffing, which
+// is exactly what the gateway policy exists to prevent. Set TTOS_DASH_FRAMES on a
+// bench image when you want the frame tabs back.
+//
+// This is a blunt all-or-nothing gate. Phase 5 replaces it with per-session unlock
+// tiers, which needs per-client filtering in the SSE hub rather than a global filter
+// at the publish site.
+var frameAllow = map[string]bool{}
+
 func publishFrame(f canbus.Frame) {
+	if !frameAllow[f.Iface] {
+		return
+	}
 	publish(struct {
 		Type string       `json:"type"`
 		F    canbus.Frame `json:"f"`
@@ -592,7 +621,15 @@ func carInfo() map[string]string {
 	} else if strings.HasPrefix(host, "ttos-car-") {
 		id = strings.TrimPrefix(host, "ttos-car-")
 	}
-	return map[string]string{"host": host, "id": id}
+	// Image variant, surfaced so the UI can shout when a bench image is running.
+	// A debug-tweaks image has an empty root password; one reaching the competition
+	// floor is a free win for whoever notices, and the hostname alone is easy to
+	// miss on a screen someone is only glancing at.
+	variant := "unknown"
+	if b, err := os.ReadFile("/etc/ttos-variant"); err == nil {
+		variant = strings.TrimSpace(string(b))
+	}
+	return map[string]string{"host": host, "id": id, "variant": variant}
 }
 
 // ---- http plumbing --------------------------------------------------------

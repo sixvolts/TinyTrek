@@ -15,7 +15,6 @@ IMAGE_INSTALL:append = " \
     can-utils can-utils-access iproute2 \
     bash \
     hostapd iw ttos-wifi-ap \
-    socketcand \
     sudo ttos-ops \
     ttos-growfs \
     ttos-provision \
@@ -24,6 +23,15 @@ IMAGE_INSTALL:append = " \
     ttos-dashboard \
     python3 python3-core \
 "
+
+# socketcand REMOVED (decision 2026-08-02). It was a TCP bridge to both CAN buses on
+# port 29536 -- an unauthenticated network path to the DRIVE bus that bypassed every
+# challenge. Restricting it to the DIAG bus would not have saved it either: socketcand
+# is only a front-end to the Pi's own can0 controller, so it adds no second node to
+# ACK, and a contestant with no physical tap cannot transmit or receive regardless.
+# Diagnostic access is now the physical side tap only. The recipe is left in the layer
+# (unbuilt) rather than deleted; do not re-add it to any image that ships on a car.
+# The C3 relay is a separate, authenticated service -- it does NOT reuse socketcand.
 
 # Accounts (§5.5):
 #  - root: locked -> no login on any path.
