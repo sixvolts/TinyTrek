@@ -17,6 +17,7 @@ IMAGE_INSTALL:append = " \
     hostapd iw ttos-wifi-ap \
     socketcand \
     sudo ttos-ops \
+    ttos-growfs \
     ttos-provision \
     ttos-usb-console \
     ttos-tools \

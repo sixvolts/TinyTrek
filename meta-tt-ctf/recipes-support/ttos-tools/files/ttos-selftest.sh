@@ -71,7 +71,7 @@ NPROBE=$(printf '%s\n' "$DM" | grep -ci 'MCP2518FD\|successfully initialized\|re
 if [ "$NPROBE" -ge 2 ]; then ok "mcp251xfd: 2 controllers probed"
 elif [ "$NPROBE" -eq 1 ]; then no "mcp251xfd: only 1 controller probed (expected 2 -- check HAT Mode A jumpers/wiring)"
 else no "mcp251xfd: no controllers probed (check HAT seating, overlays, SPI)"; fi
-[ -n "$DM" ] && printf '%s\n' "$DM" | tail -4 | sed 's/^/         /'
+[ -n "$DM" ] && printf '%s\n' "$DM" | tail -n 4 | sed 's/^/         /'
 
 # ---------------------------------------------------------------------------
 hdr "4. CAN interfaces  (§7: can0 classic 500k ERROR-ACTIVE; can1 FD 500k/1M)"
@@ -81,11 +81,11 @@ check_can(){ # $1=iface  $2=expect_fd(0/1)
     # networkd may still be configuring right after boot; wait for the admin UP flag.
     # NOTE: CAN interfaces report operstate UNKNOWN even when up, so we check the
     # <...,UP,...> admin flag, not 'state UP'.
-    i=0; while [ "$i" -lt 8 ]; do ip link show "$ifc" 2>/dev/null | head -1 | grep -qE '[<,]UP[,>]' && break; i=$((i+1)); sleep 1; done
+    i=0; while [ "$i" -lt 8 ]; do ip link show "$ifc" 2>/dev/null | head -n 1 | grep -qE '[<,]UP[,>]' && break; i=$((i+1)); sleep 1; done
     D=$(ip -details -statistics link show "$ifc" 2>/dev/null)
     STATE=$(echo "$D" | grep -o 'can state [A-Z-]*' | awk '{print $3}')
-    BR=$(echo "$D" | grep -o 'bitrate [0-9]*' | head -1 | awk '{print $2}')
-    if ip link show "$ifc" 2>/dev/null | head -1 | grep -qE '[<,]UP[,>]'; then ok "$ifc is UP"
+    BR=$(echo "$D" | grep -o 'bitrate [0-9]*' | head -n 1 | awk '{print $2}')
+    if ip link show "$ifc" 2>/dev/null | head -n 1 | grep -qE '[<,]UP[,>]'; then ok "$ifc is UP"
     else no "$ifc is DOWN (should come up automatically at boot)"; fi
     [ "$BR" = "500000" ] && ok "$ifc arbitration bitrate = 500000" || no "$ifc bitrate = ${BR:-?} (expected 500000)"
     if [ "$fd" = "1" ]; then

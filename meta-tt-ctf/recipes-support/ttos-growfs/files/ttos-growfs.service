@@ -1,0 +1,19 @@
+[Unit]
+Description=TTOS CTF rootfs expansion (grow root partition + ext4 to fill the card)
+# Runs ONLY on a provisioned car -- never on the blank/factory test image -- and
+# only AFTER provisioning, so it can never delay or block the factory AP/console.
+# (On a provisioned car it may reboot once on first boot to finish -- see script.)
+After=ttos-provision.service local-fs.target
+ConditionPathExists=/etc/ttos/provisioned
+ConditionPathExists=!/etc/ttos/rootfs-expanded
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Nice=10
+ExecStart=/usr/sbin/ttos-growfs
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

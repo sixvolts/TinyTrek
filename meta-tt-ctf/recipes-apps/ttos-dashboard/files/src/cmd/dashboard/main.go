@@ -45,16 +45,22 @@ func main() {
 	ethIf := flag.String("eth", envOr("TTOS_DASH_ETH_IF", "eth0"), "interface for the Ethernet indicator")
 	demo := flag.Bool("demo", false, "synthesize battery/sensor indicators (arcana mock)")
 	driveIf := flag.String("drive", os.Getenv("TTOS_DASH_DRIVE"), "CAN interface to SEND control frames on (empty = read-only)")
-	steps := flag.Uint("steps", uint(envInt("TTOS_DASH_STEPS", 255)), "stepper steps per straight move")
-	turns := flag.Uint("turnsteps", uint(envInt("TTOS_DASH_TURN_STEPS", 128)), "stepper steps per turn/rotate")
+	rpmStraight := flag.Uint("rpm", uint(envInt("TTOS_DASH_RPM", 100)), "stepper rpm for straight moves (speed)")
+	rpmTurn := flag.Uint("turnrpm", uint(envInt("TTOS_DASH_TURN_RPM", 50)), "stepper rpm for turns/rotate (slower = gentler)")
+	keepaliveF := flag.Uint("keepalive", uint(envInt("TTOS_DASH_KEEPALIVE_MS", 150)), "hold-to-drive keepalive interval (ms); each keepalive tops up the node's step buffer")
+	stepChunkF := flag.Uint("stepchunk", uint(envInt("TTOS_DASH_STEP_CHUNK", 100)), "steps added to the node buffer per command (~2x per-keepalive consumption; buffer caps at firmware STEPS_MAX ~2.5x this)")
 	battID := flag.Uint("battid", uint(envInt("TTOS_DASH_BATT_ID", 0x116)), "CAN ID of BMS battery telemetry")
-	battMin := flag.Int("battmin", envInt("TTOS_DASH_BATT_MIN_MV", 8400), "battery millivolts at 0%")
-	battMax := flag.Int("battmax", envInt("TTOS_DASH_BATT_MAX_MV", 12300), "battery millivolts at 100%")
+	battMin := flag.Int("battmin", envInt("TTOS_DASH_BATT_MIN_MV", 8400), "battery millivolts at 0% (resting/open-circuit)")
+	battMax := flag.Int("battmax", envInt("TTOS_DASH_BATT_MAX_MV", 12300), "battery millivolts at 100% (resting/open-circuit)")
+	battLoad := flag.Int("battload", envInt("TTOS_DASH_BATT_LOAD_OFFSET_MV", 1000), "mV added to the measured (loaded) reading to estimate resting voltage; ~= the steady droop under the Pi load")
 	flag.Parse()
-	stepsPerMove = uint32(*steps)
-	turnSteps = uint32(*turns)
+	straightRPM = uint32(*rpmStraight)
+	turnRPM = uint32(*rpmTurn)
+	repeatMs := uint32(*keepaliveF) // hold-to-drive keepalive; each one refills the node's step buffer
+	stepChunk = uint32(*stepChunkF)
 	battTelemID = uint32(*battID)
 	battMinMv, battMaxMv = *battMin, *battMax
+	battLoadMv = *battLoad
 
 	ifaces := splitClean(*ifacesArg)
 	if len(ifaces) == 0 {
@@ -66,8 +72,26 @@ func main() {
 		go readLoop(ifc)
 	}
 	go statusLoop(*wifiIf, *ethIf, *demo)
+	// Pi liveness beacon for the motor nodes' status LEDs. Harmless when control
+	// is read-only: it no-ops until a drive socket exists.
+	if hb := envInt("TTOS_DASH_HEARTBEAT_MS", 200); hb > 0 {
+		go heartbeatLoop(time.Duration(hb) * time.Millisecond)
+	}
 	if *driveIf != "" {
 		go openDrive(*driveIf)
+	} else {
+		// No explicit drive interface. In factory/test mode driving must work
+		// without provisioning; TTOS_DASH_DRIVE is supposed to be set to can0 by
+		// first-boot provisioning, but if a boot-ordering hiccup left us reading
+		// an empty value we would be stuck read-only until a restart. Self-heal:
+		// watch for the factory marker and bring the internal bus up when it
+		// appears -- no reboot, no reliance on unit ordering.
+		// can1 is the verified drive bus on this hardware (motors + BMS live
+		// there); see ttos-provision.sh. Override with TTOS_DASH_FACTORY_DRIVE_IF.
+		go factoryDriveWatch(
+			envOr("TTOS_DASH_FACTORY_MARKER", "/etc/ttos/factory"),
+			envOr("TTOS_DASH_FACTORY_DRIVE_IF", "can1"),
+		)
 	}
 
 	logf("info", "console starting: ifaces=%s", strings.Join(ifaces, ","))
@@ -75,7 +99,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/events", serveEvents)
 	mux.HandleFunc("/api/info", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"ifaces": ifaces, "car": carInfo()})
+		writeJSON(w, map[string]any{"ifaces": ifaces, "car": carInfo(), "repeatMs": repeatMs})
 	})
 	mux.HandleFunc("/api/control", handleControl)
 	mux.Handle("/", uiHandler(*webdir))
@@ -177,14 +201,19 @@ func powerOn() bool {
 
 // ---- battery telemetry -----------------------------------------------------
 //
-// The BMS transmits Vbat (millivolts, uint16 big-endian) on battTelemID. We map
-// it to a percentage between battMinMv (0%) and battMaxMv (100%). Defaults suit a
-// ~12V (M12-style) pack; tune via -battmin/-battmax (env TTOS_DASH_BATT_*).
+// The BMS transmits Vbat (millivolts, uint16 big-endian) on battTelemID -- the
+// LOADED terminal voltage. We map it to a percentage between battMinMv (0%) and
+// battMaxMv (100%), which are RESTING (open-circuit) cell voltages. Because the
+// car draws a roughly constant load (the Pi + electronics), the terminal voltage
+// sags below resting by ~I*R_internal, a near-constant offset; battLoadMv adds
+// that back so a full pack reads ~100% instead of low. Tune the endpoints via
+// -battmin/-battmax and the offset via -battload (env TTOS_DASH_BATT_*).
 
 var (
 	battTelemID uint32 = 0x116
-	battMinMv          = 8400  // 0%   = 2.8 V/cell x3
-	battMaxMv          = 12300 // 100% = 4.1 V/cell x3
+	battMinMv          = 8400  // 0%   = 2.8 V/cell x3 (resting)
+	battMaxMv          = 12300 // 100% = 4.1 V/cell x3 (resting)
+	battLoadMv         = 1000  // added to the measured (loaded) reading to estimate resting V
 )
 
 var battery = struct {
@@ -192,6 +221,25 @@ var battery = struct {
 	mv   int
 	when time.Time
 }{}
+
+// bms holds the rail state reported BY the BMS itself (beacon byte 2), as opposed
+// to the state we commanded. They differ whenever the BMS refuses or drops power
+// on its own -- e.g. the low-voltage cutoff -- which is exactly when a truthful
+// indicator matters.
+var bms = struct {
+	sync.Mutex
+	on    bool
+	lvc   bool
+	when  time.Time
+	valid bool
+}{}
+
+// bmsPower reports the BMS's own rail state and whether that report is fresh.
+func bmsPower() (on bool, fresh bool) {
+	bms.Lock()
+	defer bms.Unlock()
+	return bms.on, bms.valid && time.Since(bms.when) < 3*time.Second
+}
 
 func recordBattery(f canbus.Frame) {
 	if f.ID != battTelemID || len(f.Data) < 2 {
@@ -201,6 +249,16 @@ func recordBattery(f canbus.Frame) {
 	battery.Lock()
 	battery.mv, battery.when = mv, time.Now()
 	battery.Unlock()
+
+	// Beacon form: [v_hi][v_lo][pwr][flags]. Older 2-byte telemetry carries no
+	// rail state, so leave the previous reading alone rather than inventing one.
+	if len(f.Data) >= 3 {
+		bms.Lock()
+		bms.on = f.Data[2] == 0x01
+		bms.lvc = len(f.Data) >= 4 && f.Data[3]&0x01 != 0
+		bms.when, bms.valid = time.Now(), true
+		bms.Unlock()
+	}
 }
 
 // batteryPct returns the charge percent, or nil if there is no recent reading.
@@ -211,7 +269,8 @@ func batteryPct() *int {
 	if mv == 0 || time.Since(when) > 5*time.Second || battMaxMv <= battMinMv {
 		return nil
 	}
-	p := (mv - battMinMv) * 100 / (battMaxMv - battMinMv)
+	// Compensate the loaded reading up to an estimated resting voltage before mapping.
+	p := (mv + battLoadMv - battMinMv) * 100 / (battMaxMv - battMinMv)
 	if p < 0 {
 		p = 0
 	} else if p > 100 {
@@ -245,8 +304,16 @@ func gatherStatus(wifiIf, ethIf string, demo bool) statusEvent {
 	s := statusEvent{Type: "status", USonic: "unknown", Camera: "unknown"}
 	s.WiFi = linkState(wifiIf)
 	s.Eth = linkState(ethIf)
+	// Prefer the BMS's own reported rail state over what we commanded: if the BMS
+	// cut power itself (low-voltage cutoff) the indicator must show that, not our
+	// optimistic view. Fall back to the commanded state only when no beacon is
+	// arriving (older BMS firmware, or the BMS is not on the bus).
 	s.V12 = "inactive"
-	if powerOn() {
+	if on, fresh := bmsPower(); fresh {
+		if on {
+			s.V12 = "active"
+		}
+	} else if powerOn() {
 		s.V12 = "active"
 	}
 	s.Battery = batteryPct() // real BMS telemetry (nil if none); demo overrides below
@@ -283,7 +350,7 @@ func linkState(iface string) string {
 
 var controlCmds = map[string]bool{
 	"forward": true, "back": true, "left": true, "right": true,
-	"cw": true, "ccw": true, "stop": true,
+	"cw": true, "ccw": true, "stop": true, "coast": true,
 }
 
 // TinyTrek reused protocol (from the public repo firmware -- no firmware change):
@@ -293,33 +360,56 @@ var controlCmds = map[string]bool{
 //	        dir 0x02 = reverse, anything else = forward.
 //	0x115 = BMS power: [0x01] = 12V rail on, [0x02] = off
 const (
-	idLMotor = 0x111
-	idRMotor = 0x113
-	idBMS    = 0x115
+	idHeartbeat = 0x100 // Pi -> nodes: liveness beacon [seq][flags]
+	idLMotor    = 0x111
+	idRMotor    = 0x113
+	idBMS       = 0x115
 )
 
-// Steps per motion command: straight moves and turns are tuned separately (turns
-// tend to over-rotate). Set from -steps / -turnsteps (env TTOS_DASH_STEPS /
-// TTOS_DASH_TURN_STEPS) -- tune live on the car, no rebuild.
+// Motion tuning. The motor nodes run a CONSUMED STEP BUFFER: each command ADDS
+// `stepChunk` steps to a buffer (capped at the firmware's STEPS_MAX, ~2.5x a
+// chunk) that the node drains as it steps, so dropped/jittered frames don't stall
+// it -- it keeps stepping off the reservoir until refilled. Each keepalive adds
+// ~2x what's consumed between frames, so the buffer fills to the cap and rides a
+// couple of missed frames. rpm sets speed (straights faster than turns).
+// Release/stop sends dir 0x00 to clear the buffer promptly.
 var (
-	stepsPerMove uint32 = 255
-	turnSteps    uint32 = 128
+	straightRPM uint32 = 100
+	turnRPM     uint32 = 50
+	stepChunk   uint32 = 100 // steps added per command; buffer caps ~2.5x this (firmware STEPS_MAX)
 )
 
-// moveSteps returns the step count for a command (turns use the smaller value).
-func moveSteps(cmd string) uint32 {
+// moveParams returns the step chunk to add and the rpm byte for a command.
+func moveParams(cmd string) (steps uint32, rpm uint32) {
 	switch cmd {
 	case "left", "right", "cw", "ccw":
-		return turnSteps
+		rpm = turnRPM
 	default: // forward, back
-		return stepsPerMove
+		rpm = straightRPM
 	}
+	if rpm < 1 {
+		rpm = 1
+	}
+	if rpm > 255 {
+		rpm = 255 // fits one CAN byte
+	}
+	return stepChunk, rpm
 }
 
-func motorFrame(id uint32, dir byte, steps uint32) canbus.Frame {
-	data := make([]byte, 5)
+// motorFrame builds [steps:uint32 BE][dir][rpm]. The trailing rpm byte lets each
+// wheel run at its own speed; firmware predating it (a 5-byte frame) just falls
+// back to its built-in default rpm.
+func motorFrame(id uint32, dir byte, steps, rpm uint32) canbus.Frame {
+	if rpm < 1 {
+		rpm = 1
+	}
+	if rpm > 255 {
+		rpm = 255
+	}
+	data := make([]byte, 6)
 	binary.BigEndian.PutUint32(data[0:4], steps)
 	data[4] = dir
+	data[5] = byte(rpm)
 	return canbus.Frame{ID: id, Data: data}
 }
 
@@ -361,18 +451,31 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var frames []canbus.Frame
-	if body.Cmd == "stop" {
+	switch body.Cmd {
+	case "stop":
+		// e-stop: clear both motor buffers (dir 0x00) AND cut the 12V rail.
 		setPower(false)
-		frames = []canbus.Frame{bmsFrame(false)} // cut the 12V rail -- e-stop
-	} else {
+		frames = []canbus.Frame{
+			motorFrame(idLMotor, 0x00, 0, straightRPM),
+			motorFrame(idRMotor, 0x00, 0, straightRPM),
+			bmsFrame(false),
+		}
+	case "coast":
+		// button released: clear the motor buffers so the wheels stop promptly,
+		// but leave the 12V rail on so the next press moves without re-arming.
+		frames = []canbus.Frame{
+			motorFrame(idLMotor, 0x00, 0, straightRPM),
+			motorFrame(idRMotor, 0x00, 0, straightRPM),
+		}
+	default:
 		ld, rd := cmdMotors(body.Cmd)
 		if !powerOn() {
 			frames = append(frames, bmsFrame(true)) // 12V rail on before moving
 			setPower(true)
 		}
-		// One discrete stepper move per command on each wheel.
-		steps := moveSteps(body.Cmd)
-		frames = append(frames, motorFrame(idLMotor, ld, steps), motorFrame(idRMotor, rd, steps))
+		// Top up each wheel's step buffer (rpm sets the speed).
+		steps, rpm := moveParams(body.Cmd)
+		frames = append(frames, motorFrame(idLMotor, ld, steps, rpm), motorFrame(idRMotor, rd, steps, rpm))
 	}
 
 	if sendDrive(frames) {
@@ -406,6 +509,54 @@ func openDrive(iface string) {
 	}
 }
 
+// factoryDriveWatch enables the drive bus when the factory/test marker is
+// present. It self-heals the first-boot race where the dashboard reads an empty
+// TTOS_DASH_DRIVE before provisioning writes it: as soon as the marker exists,
+// the internal bus comes up (openDrive retries until the iface is ready) and
+// control goes LIVE -- no restart needed. On a provisioned car the marker is
+// absent, so this stays a no-op and the console remains read-only by design.
+func factoryDriveWatch(marker, iface string) {
+	for tries := 0; tries < 60; tries++ { // ~5 min window; factory state is set early in boot
+		drive.Lock()
+		open := drive.conn != nil
+		drive.Unlock()
+		if open {
+			return // an explicit path already enabled the bus
+		}
+		if _, err := os.Stat(marker); err == nil {
+			logf("info", "factory/test mode (%s present) -- enabling drive on %s", marker, iface)
+			openDrive(iface) // blocks retrying until the iface opens, then returns LIVE
+			return
+		}
+		time.Sleep(5 * time.Second)
+	}
+}
+
+// heartbeatLoop transmits the Pi liveness beacon (0x100) on the drive bus. The
+// motor nodes only show READY (green) while this keeps arriving; if the Pi dies
+// or the bus is unplugged they fall back to a double-blink red, which is how you
+// tell "Pi not talking" apart from "no 12V" at a glance.
+//
+// It rides the drive socket, so it is only sent when control is LIVE -- a
+// read-only car deliberately transmits nothing at all. Send errors are ignored
+// here on purpose: at 5 Hz a broken bus would flood the log, and the condition is
+// already reported by sendDrive on the next real command (and by the red LEDs).
+func heartbeatLoop(period time.Duration) {
+	var seq byte
+	t := time.NewTicker(period)
+	defer t.Stop()
+	for range t.C {
+		drive.Lock()
+		c := drive.conn
+		drive.Unlock()
+		if c == nil {
+			continue
+		}
+		_ = c.Send(canbus.Frame{ID: idHeartbeat, Data: []byte{seq, 0x00}})
+		seq++
+	}
+}
+
 func sendDrive(frames []canbus.Frame) bool {
 	drive.Lock()
 	c := drive.conn
@@ -413,8 +564,14 @@ func sendDrive(frames []canbus.Frame) bool {
 	if c == nil {
 		return false
 	}
+	// Report write failures instead of swallowing them: a down/absent CAN
+	// interface would otherwise still be logged as "sent", which makes the console
+	// lie about whether a command actually reached the bus.
 	for _, f := range frames {
-		_ = c.Send(f)
+		if err := c.Send(f); err != nil {
+			logf("error", "drive TX failed on %X (%v) -- is the CAN interface up?", f.ID, err)
+			return false
+		}
 	}
 	return true
 }

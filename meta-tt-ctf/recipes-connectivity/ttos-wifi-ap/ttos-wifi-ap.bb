@@ -8,6 +8,7 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 SRC_URI = " \
     file://hostapd.conf.template \
     file://ttos-ap.service \
+    file://ttos-ap-prestart.sh \
     file://ttos-ap-txpower.sh \
     file://ttos-wifi.default.example \
 "
@@ -28,6 +29,7 @@ do_install() {
     install -m 0644 ${WORKDIR}/ttos-wifi.default.example ${D}${sysconfdir}/default/ttos-wifi.example
 
     install -d ${D}${bindir}
+    install -m 0755 ${WORKDIR}/ttos-ap-prestart.sh ${D}${bindir}/ttos-ap-prestart
     install -m 0755 ${WORKDIR}/ttos-ap-txpower.sh ${D}${bindir}/ttos-ap-txpower
 
     install -d ${D}${systemd_system_unitdir}
@@ -37,6 +39,7 @@ do_install() {
 FILES:${PN} += " \
     ${sysconfdir}/hostapd/hostapd.conf.template \
     ${sysconfdir}/default/ttos-wifi.example \
+    ${bindir}/ttos-ap-prestart \
     ${bindir}/ttos-ap-txpower \
     ${systemd_system_unitdir}/ttos-ap.service \
 "

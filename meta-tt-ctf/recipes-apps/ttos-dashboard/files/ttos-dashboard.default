@@ -3,23 +3,50 @@
 # Listen address. On the car the console is served on the WiFi AP address, port 80
 # (reachable only over the AP). This must match the AP address in 30-wlan-ap.network
 # / the per-car provisioned value. The service retries the bind until wlan0 is up.
-TTOS_DASH_ADDR=192.168.4.1:80
+TTOS_DASH_ADDR=192.168.244.1:80
 
 # Comma-separated CAN interfaces to monitor.
 TTOS_DASH_IFACES=can0,can1
 
-# Interface to SEND control frames on (the internal drive bus). EMPTY = read-only:
-# the control buttons validate + log but do not transmit. Set to "can0" to enable
-# live driving (control phase).
+# Interface to SEND control frames on (the drive bus). EMPTY = read-only: the
+# control buttons validate + log but do not transmit.
+#
+# VERIFIED 2026-08-01: the motors and BMS are on **can1** on this hardware -- the
+# BMS answers with 0x116 telemetry there, and can0 has no nodes (writes fail with
+# ENOBUFS: no ACK). The original design doc said can0 = internal drive bus; the
+# physical wiring says otherwise. Trust the car, not the doc.
+#
+# Factory/test mode sets this to can1 ONLY when it is empty, so a deliberate
+# operator change survives reboots. Provisioning resets it to empty (read-only);
+# once provisioned, set it here + `systemctl restart ttos-dashboard` to drive.
 TTOS_DASH_DRIVE=
 
-# Stepper steps per motion command (each button press / hold-repeat). Tune per car:
-# straight moves and turns are separate (turns tend to over-rotate). Default 255/128.
-TTOS_DASH_STEPS=255
-TTOS_DASH_TURN_STEPS=128
+# Motion tuning. The motor nodes run a consumed step buffer: each command ADDS
+# STEP_CHUNK steps to a buffer (capped at the firmware STEPS_MAX, ~2.5x a chunk =
+# 250) that the node drains as it steps, so dropped/jittered CAN frames don't stall
+# it. rpm sets speed (lower = gentler). Each KEEPALIVE_MS adds ~2x what's consumed
+# between frames, so the buffer fills to the cap and rides a couple of missed
+# frames; release/stop clears it. Bigger STEP_CHUNK/STEPS_MAX = smoother through
+# loss but longer coast if a release is missed.
+TTOS_DASH_RPM=100
+TTOS_DASH_TURN_RPM=50
+TTOS_DASH_KEEPALIVE_MS=150
+TTOS_DASH_STEP_CHUNK=100
 
-# Battery gauge: the BMS transmits Vbat (mV, uint16 BE) on this CAN ID; the gauge
-# maps battmin..battmax mV to 0..100%. 3S pack: 2.8 V/cell (8.4 V) 0% .. 4.1 V/cell (12.3 V) 100%.
+# Pi liveness heartbeat (CAN 0x100) for the motor nodes' status LEDs. They show
+# READY (green) only while this keeps arriving and the BMS reports 12V on; losing
+# it gives a double-blink red, so you can tell "Pi not talking" from "no 12V" by
+# looking at the robot. Must stay well under the firmware's 1s timeout. 0 = off.
+# Only transmitted when driving is enabled (read-only cars transmit nothing).
+TTOS_DASH_HEARTBEAT_MS=200
+
+# Battery gauge: the BMS transmits Vbat (mV, uint16 BE, LOADED terminal voltage) on
+# this CAN ID; the gauge maps battmin..battmax mV (RESTING cell voltages) to 0..100%.
+# 3S pack: 2.8 V/cell (8.4 V) 0% .. 4.1 V/cell (12.3 V) 100%.
+# LOAD_OFFSET_MV is added to the measured reading to undo the ~constant droop under
+# the Pi's steady load (so a full pack reads ~100%). Calibrate against a DMM:
+# offset ~= (resting battery volts) - (volts shown on the bus while running).
 TTOS_DASH_BATT_ID=0x116
 TTOS_DASH_BATT_MIN_MV=8400
 TTOS_DASH_BATT_MAX_MV=12300
+TTOS_DASH_BATT_LOAD_OFFSET_MV=1000

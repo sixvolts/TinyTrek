@@ -1,19 +1,32 @@
 [Unit]
 Description=TTOS CTF WiFi Access Point (hostapd)
 Wants=network.target
+# Ordering only, and deliberately NO Wants=/Requires= on the wlan0 .device unit:
+# pulling a device unit into the transaction can itself stall if the radio never
+# enumerates. ttos-ap-prestart waits for wlan0 explicitly (bounded) instead.
 After=ttos-provision.service sys-subsystem-net-devices-wlan0.device
-Requires=ttos-provision.service
-# Never start unprovisioned: provisioning renders the real hostapd.conf from the
-# template. If provisioning failed/was skipped, the AP stays down (§5.6 fail-loud).
+# Ordering only (NOT Requires=): a provisioning failure must not also take the AP
+# down for good. The real guard is the Condition below -- hostapd.conf only exists
+# if provisioning (or factory/test mode) rendered it, so an unconfigured car still
+# never starts an AP.
+Wants=ttos-provision.service
 ConditionPathExists=/etc/hostapd/hostapd.conf
+
+# Never stop retrying. With the systemd defaults (StartLimitBurst=5 in 10s) a few
+# fast failures while the radio is still coming up would latch the unit into a
+# permanent 'failed' state -- no AP until the next reboot. That marginal race is
+# the "AP missing on some boots" bug; 0 disables the limit so it retries forever.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 EnvironmentFile=-/etc/default/ttos-wifi
-ExecStartPre=-/usr/sbin/iw reg set ${TTOS_WIFI_COUNTRY}
+# Wait for wlan0, clear rfkill, apply+settle the regulatory domain (see script).
+ExecStartPre=/usr/bin/ttos-ap-prestart
 ExecStart=/usr/sbin/hostapd /etc/hostapd/hostapd.conf
-ExecStartPost=/usr/bin/ttos-ap-txpower
-Restart=on-failure
+# Best-effort (leading '-'): a txpower failure must never kill a working AP.
+ExecStartPost=-/usr/bin/ttos-ap-txpower
+Restart=always
 RestartSec=3
 
 [Install]

@@ -1,13 +1,14 @@
 # wlan0 -- WiFi AP interface (§5.3). hostapd owns the radio/BSS; systemd-networkd
 # owns the IP layer and serves DHCP (NOT dnsmasq).
 #
-# Default AP subnet is 192.168.4.0/24 with the car at .1. First-boot provisioning
-# (§5.6) may override the address per car via a drop-in if IP differs per car.
+# Default AP subnet is 192.168.244.0/24 with the car at .1 (chosen to avoid the
+# common 192.168.0/1/4.x home ranges). First-boot provisioning (§5.6) may override
+# the address per car via a drop-in if IP differs per car.
 [Match]
 Name=wlan0
 
 [Network]
-Address=192.168.4.1/24
+Address=192.168.244.1/24
 DHCPServer=yes
 ConfigureWithoutCarrier=yes
 
@@ -15,3 +16,7 @@ ConfigureWithoutCarrier=yes
 PoolOffset=10
 PoolSize=50
 EmitDNS=no
+# Do NOT hand out a default route: the car AP is not an internet gateway, and a
+# default route would hijack the client's normal connectivity. Clients get only
+# an address on the /24 and reach the car directly.
+EmitRouter=no

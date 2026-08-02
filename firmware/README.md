@@ -1,20 +1,57 @@
 # TinyTrek node firmware
 
-The Arduino/MCP2515 CAN nodes on the car's **internal drive bus (`can0`, classic
-CAN 2.0 @ 500 kbit)**:
+The CAN nodes on the car's drive bus (classic CAN 2.0 @ 500 kbit). **On the current
+hardware this bus enumerates on the Pi as `can1`, not `can0`** — verified 2026-08-01
+(motors + BMS answer there; `can0` has no nodes and writes fail with `ENOBUFS`).
+
+Boards: motor nodes are **Adafruit QT Py SAMD21 + MCP2515** (`CAN.setPins(3, 0)`);
+the BMS is an **Adafruit Feather RP2040 CAN** (built-in MCP2518FD).
 
 | Sketch | CAN ID | Role |
 |---|---|---|
-| `TinytrekLMotor` | `0x111` | left stepper: `[steps:uint32 BE][dir]` — move N steps then stop; dir `0x02`=reverse else forward |
+| `TinytrekLMotor` | `0x111` | left stepper (consumed step buffer): `[steps:uint32 BE][dir][rpm]` — ADDS `steps` to a capped buffer the node drains as it steps; dir `0x02`=reverse / `0x01`=forward / `0x00`=stop (clear); `rpm` sets speed. |
 | `TinytrekRMotor` | `0x113` | right stepper: same format |
-| `TinytrekBMS`    | `0x115` | power/12V rail: `[0x01]`=on, `[0x02]`=off |
+| `TinytrekBMS`    | `0x115` | RX power command: `[0x01]`=12V on, `[0x02]`=off |
+| `TinytrekBMS`    | `0x116` | TX **beacon** @5 Hz: `[v_hi][v_lo][pwr][flags]` — pack mV (uint16 BE), `pwr` `0x01`=rail on / `0x02`=off (the **actual** state, not the commanded one), `flags` bit0 = low-voltage cutoff latched |
+| *(the Pi)*       | `0x100` | TX **heartbeat** @5 Hz: `[seq][flags]` — "the Pi is alive and in control" |
 
 The dashboard's control pad drives these verbatim (see `meta-tt-ctf/recipes-apps/ttos-dashboard`).
 
-## Building (vendored library — no global install)
+## Status LEDs — reading the system state off the robot
 
-The `CAN.h` dependency (Sandeep Mistry `arduino-CAN`, MIT) is **vendored** in
-`libraries/CAN/`, so builds don't depend on whatever is installed globally.
+Every node's onboard NeoPixel reports the health of the **whole chain**, so a
+glance tells you which link is broken. Both periodic messages (`0x100`, `0x116`)
+run at 5 Hz with a 1 s timeout on the motor nodes.
+
+**Motor nodes** — two things must be true to leave red: a Pi heartbeat *and* a BMS
+beacon saying the 12 V rail is on.
+
+| LED | Meaning |
+|---|---|
+| 🟢 solid green | **READY** — heartbeat + 12 V both good, not moving |
+| 🟡 solid yellow | **ACTIVE** — propulsion commanded and running |
+| 🔴 **double**-blink red | no heartbeat from the Pi (12 V is fine) |
+| 🔴 **regular** blink red | no 12 V active (heartbeat is fine) |
+| 🔴 solid red | both missing — also the power-on state before anything is received |
+
+So: *blink pattern tells you which signal is missing; red-vs-green tells you if
+you're ready to drive.* A node that never leaves solid red is not receiving CAN at
+all — check its wiring/termination first.
+
+Note the heartbeat only transmits when driving is **enabled** on the dashboard
+(`TTOS_DASH_DRIVE=can1`). A read-only car deliberately transmits nothing, so its
+motor nodes will double-blink red — that is correct, not a fault.
+
+## Building (vendored libraries — no global install)
+
+Dependencies are **vendored** under `libraries/`, so builds don't depend on
+whatever is installed globally:
+
+- `libraries/CAN/` — Sandeep Mistry `arduino-CAN` (MIT), the `CAN.h` API.
+- `libraries/Adafruit_NeoPixel/` — Adafruit NeoPixel (LGPL-3.0), the status LEDs
+  (all three nodes). QT Py SAMD21 uses `PIN_NEOPIXEL` = 11 and has no
+  `NEOPIXEL_POWER` gate pin; the Feather RP2040 CAN has both. The sketches guard
+  on `#ifdef`, so the same code is correct on either board.
 
 **With `arduino-cli`:**
 ```bash
@@ -35,9 +72,19 @@ ln -s "$(pwd)/libraries/CAN" ~/Documents/Arduino/libraries/CAN
   built-in MCP2515 — the sketch's `PIN_CAN_CS`/`PIN_CAN_INTERRUPT` come from the
   Adafruit Feather RP2040 CAN variant (`rp2040:rp2040:adafruit_feather_can` in the
   earlephilhower core). (The "Arduino UNO" header comment is a stale leftover.)
-- **Motor speed / torque**: `int rpm = 150;` in each motor sketch sets the stepper
-  speed. Lower it (e.g. 80–100) if it's too fast / torque-y on smooth floors. This
-  needs a reflash of both motor nodes.
+- **Consumed step buffer (smooth + loss-tolerant) + speed byte**: each command
+  ADDS its `steps` to a capped buffer (`STEPS_MAX`, 250 — ~2.5× the dashboard's
+  per-frame chunk) that the node drains as it steps, staying energised while the
+  buffer holds steps. Motion follows the buffer, not message timing, so dropped or
+  jittered frames don't stall it — it keeps stepping off the reservoir. `rpm` sets
+  speed; the dashboard adds `TTOS_DASH_STEP_CHUNK` (100) steps every ~150 ms
+  keepalive — about 2× what's consumed between frames, so the buffer fills to the
+  cap and rides a couple of missed frames — and a release/stop sends `dir 0x00`
+  to clear it promptly. The cap bounds coast and
+  makes runaway impossible (it halts within `STEPS_MAX` steps if commands stop).
+  Bigger `STEPS_MAX` = smoother through heavier loss but longer coast if a release
+  is missed. `int rpm = 100;` is only the fallback speed when a frame omits the
+  `rpm` byte.
 - **`TinytrekBMS`** uses `CAN.setPins(PIN_CAN_CS, PIN_CAN_INTERRUPT)` — those macros
   are board-specific; set literal CS/INT pins (like the motor sketches' `setPins(3, 0)`)
   to match your MCP2515 wiring if they aren't defined for your board.
@@ -45,3 +92,22 @@ ln -s "$(pwd)/libraries/CAN" ~/Documents/Arduino/libraries/CAN
   `A1` (ratio 0.2509; `Vbat = Vadc × 3.985`). `TinytrekBMS` reads it and transmits
   `Vbat` (mV, uint16 BE) on `0x116` at ~1 Hz. `ADC_REF_MV = 3300` (3.3 V board); if
   the gauge is slightly off vs a multimeter, nudge that constant.
+
+## BMS status LED (onboard NeoPixel)
+
+`TinytrekBMS` drives the Feather RP2040 CAN's onboard NeoPixel as a state light.
+**Blink rate = 12 V relay; color = battery band; fast blink is reserved for the
+low-voltage cutoff.** Bands come from the same 3S range as the dashboard gauge
+(8.4 V = 0 %, 12.3 V = 100 % → 50 % = 10.35 V, 25 % = 9.375 V; cutoff 8.5 V):
+
+| Battery band | 12 V **off** (solid) | 12 V **on** (slow blink) |
+|---|---|---|
+| ≥ 50 % | 🟢 solid green | 🟢 slow-blink green |
+| 25–50 % | 🟠 solid amber | 🟠 slow-blink amber |
+| < 25 % (above cutoff) | 🔴 solid red | 🔴 slow-blink red |
+| below cutoff (8.5 V) | 🔴 **fast-blink red** (12 V forced off) | — |
+
+Timing/brightness knobs: `BLINK_SLOW_MS` / `BLINK_FAST_MS` / `LED_BRIGHTNESS`.
+The pixel is on `PIN_NEOPIXEL` (from the board variant); `NEOPIXEL_POWER` is
+enabled if the variant defines it. Update is non-blocking (throttled millis
+blink, `show()` only on change) so it never stalls CAN RX or the cutoff loop.

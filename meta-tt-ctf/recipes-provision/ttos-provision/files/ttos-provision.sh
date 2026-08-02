@@ -10,6 +10,7 @@ SRC="$STATE_DIR/provision.src"          # secrets moved into the rootfs (600 roo
 LOG="$STATE_DIR/provision.log"
 TEMPLATE=/etc/hostapd/hostapd.conf.template
 HOSTAPD_CONF=/etc/hostapd/hostapd.conf
+DASH_DEFAULT=/etc/default/ttos-dashboard
 
 # Candidate locations of the provisioning file on the FAT boot partition.
 FAT_CANDIDATES="/boot/firmware/ttos-provision.conf /boot/ttos-provision.conf"
@@ -26,6 +27,86 @@ fail() {
     # Persistent warning at the login prompt.
     printf '\n*** %s ***\n*** This car is NOT provisioned -- do not use for competition. ***\n\n' "$msg" > /etc/issue 2>/dev/null
     exit 1
+}
+
+# set_dash_drive VALUE -- point the dashboard write path at VALUE (a CAN iface,
+# e.g. can0, or "" for read-only). Rewrites the DRIVE line in place; the rest of
+# the file (operator edits, tuning) is left untouched.
+set_dash_drive() {
+    [ -f "$DASH_DEFAULT" ] || return 0
+    if grep -q '^TTOS_DASH_DRIVE=' "$DASH_DEFAULT"; then
+        sed -i "s|^TTOS_DASH_DRIVE=.*|TTOS_DASH_DRIVE=$1|" "$DASH_DEFAULT"
+    else
+        printf 'TTOS_DASH_DRIVE=%s\n' "$1" >> "$DASH_DEFAULT"
+    fi
+}
+
+# enter_factory_mode -- reached only when NO provisioning file is present (a
+# MALFORMED file still fails loud below). Bring the car up in an UNAUTHENTICATED
+# bench-test state so hardware can be exercised before provisioning: an open
+# "TTOS-TEST" AP and a live (drivable) dashboard. This is deliberately NOT
+# competition-ready and is overwritten the instant a valid provision file applies.
+enter_factory_mode() {
+    log "no provisioning file -- entering FACTORY/TEST mode (open AP TTOS-TEST, driving enabled)"
+
+    mkdir -p /etc/hostapd
+    # Open network: WPA settings omitted, auth_algs=1 (open system auth).
+    cat > "$HOSTAPD_CONF" <<'EOF'
+# TTOS FACTORY / TEST MODE -- generated, NOT committed source. Open (no WPA) AP
+# for bench hardware testing before provisioning. Overwritten on provisioning.
+interface=wlan0
+driver=nl80211
+ssid=TTOS-TEST
+country_code=US
+ieee80211d=1
+hw_mode=a
+channel=36
+ieee80211n=1
+wmm_enabled=1
+auth_algs=1
+EOF
+    chmod 644 "$HOSTAPD_CONF"
+
+    # ttos-ap.service reads country (iw reg) + txpower from here.
+    cat > /etc/default/ttos-wifi <<EOF
+TTOS_WIFI_COUNTRY=US
+TTOS_WIFI_TXPOWER_MBM=500
+EOF
+
+    # Let the operator console drive the car for hardware bring-up.
+    #
+    # can1 is the VERIFIED drive bus on this hardware (motors + BMS answer there;
+    # confirmed 2026-08-01 by BMS 0x116 telemetry on can1 and ENOBUFS -- no ACK,
+    # i.e. no nodes -- on can0). Do NOT "correct" this to can0 from the design
+    # docs without checking the car.
+    #
+    # Only set it when it is UNSET: factory mode runs on every boot, and blindly
+    # rewriting this line would clobber an operator's deliberate choice (it did
+    # exactly that, silently, and cost a long debugging session).
+    cur_drive=$(sed -n 's/^TTOS_DASH_DRIVE=//p' "$DASH_DEFAULT" 2>/dev/null | head -n 1)
+    if [ -z "$cur_drive" ]; then
+        set_dash_drive "${TTOS_FACTORY_DRIVE_IF:-can1}"
+    else
+        log "factory: leaving existing TTOS_DASH_DRIVE=$cur_drive untouched"
+    fi
+
+    # Console access for hardware testing: a KNOWN login (ttos/ttos), unlocked, so
+    # a blank car is reachable on the serial console. This is a TEST credential --
+    # provisioning overwrites it with the per-car secret and re-locks the fleet.
+    printf 'ttos:ttos\n' | chpasswd 2>/dev/null
+    usermod -U ttos 2>/dev/null
+
+    : > "$STATE_DIR/factory"
+
+    # Make it unmistakable that this car is wide open.
+    for tty in /dev/console /dev/tty1 /dev/ttyAMA0; do
+        [ -w "$tty" ] && printf '\n\n******************************************************\n*** TTOS FACTORY / TEST MODE\n*** Open AP "TTOS-TEST" (no password), driving ENABLED.\n*** Console login: ttos / ttos\n*** NOT provisioned -- do NOT use for competition.\n******************************************************\n\n' > "$tty" 2>/dev/null
+    done
+    printf '\n*** TTOS FACTORY / TEST MODE -- open AP "TTOS-TEST", driving ENABLED, login ttos/ttos. ***\n*** This car is NOT provisioned. Provision it to lock down. ***\n\n' > /etc/issue 2>/dev/null
+
+    # Do NOT write the provisioned marker: stay in factory mode until a valid
+    # /boot/ttos-provision.conf appears, then provision on the next boot.
+    exit 0
 }
 
 # --- Idempotency ------------------------------------------------------------
@@ -67,7 +148,8 @@ elif [ -f "$SRC" ]; then
     SRCFILE="$SRC"
     log "resuming from staged provisioning data (FAT copy already consumed)"
 else
-    fail "no provisioning file found (looked for: $FAT_CANDIDATES)"
+    # No provisioning data at all -> bench/test state, not a hard failure.
+    enter_factory_mode
 fi
 
 # --- Parse (no shell eval -- safe for arbitrary PSK characters) -------------
@@ -190,6 +272,13 @@ ssh-keygen -A >/dev/null 2>&1 || fail "ssh-keygen -A failed"
 
 # Restore a clean login banner (in case a previous failed run left a warning).
 printf 'TinyTrekOS-CTF \\n \\l\n\n' > /etc/issue 2>/dev/null
+
+# Lock down: undo any prior FACTORY/TEST state. The open hostapd.conf was already
+# overwritten above with the WPA2 config; here we return the dashboard to its
+# read-only safety gate and drop the factory marker so it can't be mistaken for
+# (or reverted to) test mode.
+set_dash_drive ""
+rm -f "$STATE_DIR/factory"
 
 # --- Consume: stage into the rootfs, THEN wipe the FAT copy -----------------
 # Only now that everything validated and applied. A failed run above leaves the

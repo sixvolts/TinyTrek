@@ -4,16 +4,36 @@ After=local-fs.target
 # The provisioning file lives on the FAT boot partition. Order after (and pull in)
 # its mount so we never run before it is mounted -- otherwise first boot can miss
 # the file, fail loud, and only succeed on a later boot once the mount has settled.
-RequiresMountsFor=/boot /boot/firmware
-# Must run before anything that consumes per-car state:
-#  - sshd: so per-car host keys exist before the first SSH connection
-#  - ttos-ap: it Requires= this and reads the rendered hostapd.conf
-Before=sshd.service sshd.socket ssh.service ttos-ap.service systemd-user-sessions.service
+# ONLY /boot -- it is the real mount point (fstab: /dev/mmcblk0p1 /boot vfat).
+# Do NOT list /boot/firmware: it is not a mount point here, so systemd may resolve
+# it to a boot-firmware.mount unit that does not exist and refuse to start this
+# unit at all -- racy, and it silently took the AP down with it (ttos-ap ordered
+# after this). The script itself still probes both candidate paths and waits for
+# the file, so nothing is lost.
+RequiresMountsFor=/boot
+# Order ONLY before ttos-ap (which reads the hostapd.conf we render).
+#
+# Do NOT add sshd.socket/sshd.service/ssh.service here. sshd.socket belongs to
+# sockets.target -> basic.target, which must finish BEFORE multi-user.target --
+# and multi-user.target is what pulls this unit in. Ordering before it therefore
+# creates an ORDERING CYCLE, which systemd breaks by deleting a job at random.
+# When it picked this unit's job, provisioning never ran and the AP never started,
+# with the explanation logged against systemd rather than either unit (hence
+# "enabled but inactive (dead), no journal entries", non-deterministic per boot).
+# Trade-off accepted: sshd may generate throwaway host keys before provisioning
+# replaces them with the per-car set, so an SSH client connecting in the first few
+# seconds of the very first boot may see a host-key change afterwards.
+Before=ttos-ap.service
 ConditionPathExists=!/etc/ttos/provisioned
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# Hard bound on how long provisioning may run. Units ordered After= this one
+# (notably ttos-ap) wait for it to finish, so a hang here means NO AP for the
+# whole boot. Failing after 90s is strictly better: the AP then starts from the
+# hostapd.conf already on disk.
+TimeoutStartSec=90
 ExecStart=/usr/bin/ttos-provision
 # Reload networkd so an optional per-car static Ethernet drop-in takes effect now.
 ExecStartPost=-/usr/bin/networkctl reload

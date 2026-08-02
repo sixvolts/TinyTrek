@@ -102,7 +102,7 @@
 
   /* ---- controls ---- */
   .pad{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,60px);gap:8px;margin-top:4px}
-  .pad button{background:var(--panel2);border:1px solid var(--border);border-radius:12px;color:var(--text);
+  .pad button{background:var(--panel2);border:1px solid var(--border);border-radius:12px;color:var(--text);touch-action:none;
     font-size:22px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
     transition:transform .05s,background .1s,border-color .1s;user-select:none}
   .pad button .lbl{font-size:9px;letter-spacing:.5px;color:var(--muted);text-transform:uppercase}
@@ -314,11 +314,20 @@
       const node=id==='111'?'L motor':'R motor';
       const steps=((d[0]||0)*0x1000000)+((d[1]||0)<<16)+((d[2]||0)<<8)+(d[3]||0);
       const dir=d[4]||0;
-      if(steps===0) return `${node} · idle`;
-      return `${node} · ${dir===2?'rev':'fwd'} ${steps} steps`;
+      const rpm=d[5]||0;                 // optional speed byte
+      if(dir===0) return `${node} · stop`;
+      // Consumed-buffer drive: +steps tops up the node's buffer at this rpm.
+      return `${node} · drive ${dir===2?'rev':'fwd'} +${steps}${rpm?` @ ${rpm} rpm`:''}`;
     }
+    if(id==='100'){ return `Pi · heartbeat #${d[0]||0}`; }
     if(id==='115'){ const p=d[0]||0; return p===1?'BMS · power ON (12V)':p===2?'BMS · power OFF':'BMS'; }
-    if(id==='116'){ const mv=((d[0]||0)<<8)+(d[1]||0); return `BMS · battery ${(mv/1000).toFixed(2)} V`; }
+    if(id==='116'){
+      const mv=((d[0]||0)<<8)+(d[1]||0);
+      let s=`BMS · battery ${(mv/1000).toFixed(2)} V`;
+      if(d.length>=3) s+= d[2]===1?' · 12V ON':d[2]===2?' · 12V off':'';
+      if(d.length>=4 && (d[3]&1)) s+=' · LVC CUTOFF';
+      return s;
+    }
     return '';
   }
   function hms(d){return d.toLocaleTimeString('en-GB',{hour12:false})+'.'+String(d.getMilliseconds()).padStart(3,'0');}
@@ -337,7 +346,10 @@
   // The motors are steppers: each command moves a fixed number of steps then stops.
   // So a direction button is HOLD-to-drive: it fires a move on press and repeats
   // while held (releasing simply stops sending more moves). STOP cuts the 12V rail.
-  const REPEAT_MS = 500;               // > one move's duration, so moves don't pile up
+  // Hold-to-drive keepalive interval (server sets it via /api/info, kept under the
+  // firmware deadman): each repeat just refreshes the motor's deadman so it keeps
+  // running smoothly; releasing stops the keepalives and the motor coasts to stop.
+  let repeatMs = 150;
   function sendCmd(cmd){
     fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({cmd})}).catch(()=>{});
@@ -351,13 +363,19 @@
       return;
     }
     let timer=null;
-    btn._start=(e)=>{ if(e&&e.preventDefault)e.preventDefault(); if(timer)return;
-      btn.classList.add('press'); sendCmd(cmd); timer=setInterval(()=>sendCmd(cmd),REPEAT_MS); };
+    btn._start=(e)=>{ if(e){ if(e.preventDefault)e.preventDefault();
+        try{ if(e.pointerId!=null) btn.setPointerCapture(e.pointerId); }catch(_){} }
+      if(timer)return;
+      btn.classList.add('press'); sendCmd(cmd); timer=setInterval(()=>sendCmd(cmd),repeatMs); };
+    // Release only stops the keepalives; the node's step buffer drains on its own.
+    // Deliberately NO 'coast' here -- a spurious release must never be able to
+    // wipe motion (that was zeroing the buffer between every frame).
     btn._stop=()=>{ if(timer){clearInterval(timer);timer=null;} btn.classList.remove('press'); };
     btn.addEventListener('pointerdown',btn._start);
     btn.addEventListener('pointerup',btn._stop);
-    btn.addEventListener('pointerleave',btn._stop);
     btn.addEventListener('pointercancel',btn._stop);
+    // No 'pointerleave': the press transform shrinks the button under the pointer
+    // and would fire leave mid-hold; setPointerCapture keeps the hold intact.
   });
 
   // keyboard hold-to-drive: arrows / WASD, Q/E rotate, Space or Esc = STOP
@@ -380,6 +398,7 @@
   fetch('/api/info').then(r=>r.json()).then(info=>{
     if(info.car){ document.getElementById('car-id').textContent=info.car.id||'–';
       document.getElementById('car-host').textContent=info.car.host||''; }
+    if(typeof info.repeatMs==='number' && info.repeatMs>0) repeatMs=info.repeatMs;
     (info.ifaces||[]).forEach(addBus);
   }).catch(()=>{});
   connect();
