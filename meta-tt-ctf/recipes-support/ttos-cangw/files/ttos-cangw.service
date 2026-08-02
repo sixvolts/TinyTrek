@@ -1,0 +1,26 @@
+[Unit]
+Description=TTOS CTF CAN gateway policy (DRIVE <-> DIAG)
+Documentation=man:cangw(1)
+# The buses are configured by systemd-networkd, so wait for it rather than for
+# generic network-online (which on this image is satisfied by wlan0 alone).
+After=systemd-networkd.service
+Wants=systemd-networkd.service
+ConditionPathExists=/usr/bin/cangw
+#
+# DELIBERATELY NO Before=. Ordering a multi-user.target unit before a
+# socket-activated unit (sshd.socket) creates a systemd ordering cycle; systemd
+# breaks it by deleting a job chosen non-deterministically, so a unit silently
+# never runs on some boots. That is what killed the AP on ~half of boots -- see
+# SYSTEM-OVERVIEW.md section 9. Nothing needs to be ordered before this.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/ttos-cangw-policy default
+ExecStop=/usr/bin/ttos-cangw-policy flush
+# The script waits up to 30s per interface; give it room and fail visibly rather
+# than hanging the boot transaction.
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target

@@ -13,7 +13,7 @@ the BMS is an **Adafruit Feather RP2040 CAN** (built-in MCP2518FD).
 | `TinytrekRMotor` | `0x113` | right stepper: same format |
 | `TinytrekBMS`    | `0x115` | RX power command: `[0x01]`=12V on, `[0x02]`=off |
 | `TinytrekBMS`    | `0x116` | TX **beacon** @5 Hz: `[v_hi][v_lo][pwr][flags]` — pack mV (uint16 BE), `pwr` `0x01`=rail on / `0x02`=off (the **actual** state, not the commanded one), `flags` bit0 = low-voltage cutoff latched |
-| *(the Pi)*       | `0x100` | TX **heartbeat** @5 Hz: `[seq][flags]` — "the Pi is alive and in control" |
+| *(the Pi)*       | `0x100` | TX **heartbeat** @5 Hz: `[seq][flags]` — "the Pi is alive and in control". `flags` bit0 = C2 detector ARMED, bit1 = C3 detector ARMED (see below) |
 
 The dashboard's control pad drives these verbatim (see `meta-tt-ctf/recipes-apps/ttos-dashboard`).
 
@@ -38,9 +38,35 @@ So: *blink pattern tells you which signal is missing; red-vs-green tells you if
 you're ready to drive.* A node that never leaves solid red is not receiving CAN at
 all — check its wiring/termination first.
 
-Note the heartbeat only transmits when driving is **enabled** on the dashboard
-(`TTOS_DASH_DRIVE=can1`). A read-only car deliberately transmits nothing, so its
-motor nodes will double-blink red — that is correct, not a fault.
+The heartbeat is transmitted **unconditionally** by the CTF service layer. It used
+to ride the dashboard's drive gate, so a read-only car transmitted nothing and its
+motor nodes double-blinked red by design — that is no longer true, and a CTF car
+must keep the heartbeat alive while its panel is locked or no challenge can move
+the wheels. A car showing double-blink red now means the Pi really is not talking.
+
+### Heartbeat `flags` byte — detector arm mask
+
+`0x100` byte 1 tells the **BMS** which of its detectors should be armed:
+
+| Bit | Meaning when SET |
+|---|---|
+| 0 (`0x01`) | C2 detector armed (watch for same-`dir` on `0x111`/`0x113`) |
+| 1 (`0x02`) | C3 detector armed (watch for sustained forged commanding) |
+
+A locked car sends `0x03`; each bit clears when that challenge's code is redeemed
+on this car, so an unlocked panel driving normally does not re-trigger detection.
+
+**Positive arming, deliberately.** With "redeemed" semantics `flags == 0` would
+mean *armed*, so a Pi bug, a short frame, or mismatched firmware would leave
+detection live and the car would leak its C2 code during ordinary driving. With arm
+semantics those same failures leave detection **disarmed** — the challenge does not
+fire, someone reports a broken station, and it gets fixed. A dead station is
+recoverable; a leaked flag is not. So the BMS must treat a stale heartbeat (>1 s,
+the same timeout the motor nodes use) or a DLC < 2 as **arm mask 0**.
+
+The Pi re-reads the mask every tick, so the BMS *mirrors* current state rather than
+latching an event: a dropped frame self-corrects in 200 ms, a node that power-cycles
+re-syncs with no re-announcement, and restarting the service re-arms both detectors.
 
 ## Building (vendored libraries — no global install)
 

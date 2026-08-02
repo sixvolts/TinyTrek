@@ -1,7 +1,16 @@
-# can1 -- EXTERNAL diagnostic bus. CAN FD: 500 kbit/s arbitration / 1 Mbit/s data (§5.2).
-# Data rate set to 1M (not 2M) per decision: no reason to push the FD bus.
-# FDMode= and DataBitRate= in [CAN] are supported by systemd >= 246; scarthgap ships
-# systemd 255, so systemd-networkd handles this natively (no oneshot fallback needed).
+# can1 -- the DRIVE bus (internal vehicle bus).
+#
+# ROLE NAMES, NOT NUMBERS: this is the vehicle bus despite the higher number.
+# Verified on hardware 2026-08-01 -- both motor nodes and the BMS answer here.
+# Carries the Pi heartbeat (0x100), drive commands (0x111/0x113), the BMS power
+# command (0x115) and beacon (0x116), and the CTF flag frames (0x7D1/0x7D2).
+#
+# WARNING: FDMode=yes, but EVERY NODE ON THIS BUS IS CLASSIC-ONLY (MCP2515).
+# Classic frames are what actually drive the car -- arbitration is 500 kbit either
+# way, which is why this works today. But a genuine CAN FD frame transmitted here
+# is a form error to an MCP2515: the nodes can go error-passive and then bus-off,
+# and propulsion stops. The cangw policy therefore forwards CLASSIC FRAMES ONLY
+# (no -X), and nothing should ever open an FD socket for transmit on this bus.
 [Match]
 Name=can1
 

@@ -54,6 +54,12 @@ func main() {
 	battMax := flag.Int("battmax", envInt("TTOS_DASH_BATT_MAX_MV", 12300), "battery millivolts at 100% (resting/open-circuit)")
 	battLoad := flag.Int("battload", envInt("TTOS_DASH_BATT_LOAD_OFFSET_MV", 1000), "mV added to the measured (loaded) reading to estimate resting voltage; ~= the steady droop under the Pi load")
 	framesArg := flag.String("frames", os.Getenv("TTOS_DASH_FRAMES"), "comma-separated CAN interfaces whose raw frames may be streamed to the UI (empty = none; see frameAllow)")
+	// CTF service layer. Role names, not numbers -- the DRIVE bus is the
+	// higher-numbered interface on this hardware (verified 2026-08-01).
+	ctfEnable := flag.Bool("ctf", envInt("TTOS_CTF_ENABLE", 1) != 0, "run the CTF service layer (heartbeat + diagnostic server)")
+	ctfDriveIf := flag.String("ctf-drive", envOr("TTOS_CTF_DRIVE_IF", "can1"), "DRIVE bus: motors, BMS, heartbeat")
+	ctfDiagIf := flag.String("ctf-diag", envOr("TTOS_CTF_DIAG_IF", "can0"), "DIAG bus: the contestant side tap, UDS server")
+	ctfIdentPath := flag.String("ctf-identity", envOr("TTOS_CTF_IDENTITY", "/etc/ttos/provision.src"), "per-car challenge identity (VIN, serial, Data IDs, codes)")
 	flag.Parse()
 	straightRPM = uint32(*rpmStraight)
 	turnRPM = uint32(*rpmTurn)
@@ -81,10 +87,28 @@ func main() {
 		go readLoop(ifc)
 	}
 	go statusLoop(*wifiIf, *ethIf, *demo)
-	// Pi liveness beacon for the motor nodes' status LEDs. Harmless when control
-	// is read-only: it no-ops until a drive socket exists.
-	if hb := envInt("TTOS_DASH_HEARTBEAT_MS", 200); hb > 0 {
-		go heartbeatLoop(time.Duration(hb) * time.Millisecond)
+
+	// ---- CTF service layer -------------------------------------------------
+	// Bus ROLE NAMES, not numbers: DRIVE=can1 (motors, BMS), DIAG=can0 (side tap).
+	if *ctfEnable {
+		loadIdentity(*ctfIdentPath)
+
+		// The CTF layer owns its own DRIVE-bus socket, deliberately independent of
+		// TTOS_DASH_DRIVE. That gate still governs the control pad -- a locked panel
+		// transmits no drive commands -- but the heartbeat and the diagnostic
+		// routines have to work while the panel is locked, because the motor nodes
+		// refuse to move without a heartbeat.
+		go openCTFDrive(*ctfDriveIf)
+
+		// Pi liveness beacon (0x100) for the motor nodes' status LEDs. Now
+		// unconditional rather than riding the control-pad drive gate.
+		if hb := envInt("TTOS_DASH_HEARTBEAT_MS", 200); hb > 0 {
+			go heartbeatLoop(time.Duration(hb) * time.Millisecond)
+		}
+
+		go udsServe(*ctfDiagIf)
+	} else {
+		logf("warn", "CTF service disabled (TTOS_CTF_ENABLE=0) -- no heartbeat, no diagnostic server")
 	}
 	if *driveIf != "" {
 		go openDrive(*driveIf)
@@ -558,31 +582,6 @@ func factoryDriveWatch(marker, iface string) {
 			return
 		}
 		time.Sleep(5 * time.Second)
-	}
-}
-
-// heartbeatLoop transmits the Pi liveness beacon (0x100) on the drive bus. The
-// motor nodes only show READY (green) while this keeps arriving; if the Pi dies
-// or the bus is unplugged they fall back to a double-blink red, which is how you
-// tell "Pi not talking" apart from "no 12V" at a glance.
-//
-// It rides the drive socket, so it is only sent when control is LIVE -- a
-// read-only car deliberately transmits nothing at all. Send errors are ignored
-// here on purpose: at 5 Hz a broken bus would flood the log, and the condition is
-// already reported by sendDrive on the next real command (and by the red LEDs).
-func heartbeatLoop(period time.Duration) {
-	var seq byte
-	t := time.NewTicker(period)
-	defer t.Stop()
-	for range t.C {
-		drive.Lock()
-		c := drive.conn
-		drive.Unlock()
-		if c == nil {
-			continue
-		}
-		_ = c.Send(canbus.Frame{ID: idHeartbeat, Data: []byte{seq, 0x00}})
-		seq++
 	}
 }
 

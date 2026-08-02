@@ -33,6 +33,39 @@ TTOS_WIFI_TXPOWER_MBM=500
 #   mkpasswd -m yescrypt 'the-long-generated-password'   (yescrypt, $y$...)
 TTOS_CONSOLE_PW_HASH=$6$REPLACE$WITH.A.REAL.HASH.................................
 
+# --- CTF challenge data [all required] ---
+# Generated per car by provisioning/gen-fleet.py; fleet-table.csv is the source of
+# truth and the node firmware is flashed with matching constants. DO NOT hand-edit
+# these -- a firmware/provisioning mismatch presents as an unsolvable challenge, not
+# as an error. Re-render with provisioning/render-fleet.py.
+#
+# Unlike the WiFi and console values these are NOT consumed: they are read at
+# runtime on every boot from /etc/ttos/provision.src, so they must persist.
+
+# Vehicle identity. NOT secret -- both are meant to be read over the diagnostic
+# bus; that is the challenge. But do NOT print the VIN on the car's placard, or
+# contestants skip the diagnostic bus entirely.
+# VIN: 17 chars, valid ISO 3779 check digit, no I/O/Q. Served via DID 0xF190.
+TTOS_VIN=TTKTREK13TC000001
+# ECU serial: served via DID 0xF18C, EXTENDED SESSION ONLY.
+TTOS_ECU_SERIAL=TT-ECU-00-00000000
+# Fleet-wide salt, 32 hex chars. Not secret (it ships in the dashboard's client
+# JS); provisioned rather than baked in so it can rotate without a rebuild.
+TTOS_FLEET_SALT=00000000000000000000000000000000
+
+# SECRET: CRC Data IDs, 0x0001..0xFFFE, one per motor, never transmitted. They key
+# the CRC-8 on the drive frames; recovering them is Challenge 3. Must differ.
+TTOS_DATAID_L=0x0000
+TTOS_DATAID_R=0x0000
+
+# SECRET: per-car unlock codes. 8 chars, first char is the challenge number, the
+# rest from 23456789ABCDEFGHJKMNPQRSTVWXYZ (no 0/O/1/I/L -- these get retyped).
+# The panel validates them against THIS car only, so a code shouted across the
+# room is useless on another team's vehicle.
+TTOS_CODE_C1=1XXXXXXX
+TTOS_CODE_C2=2XXXXXXX
+TTOS_CODE_C3=3XXXXXXX
+
 # --- Optional ---
 # dev SSH key for the ttos user:
 #TTOS_SSH_AUTHORIZED_KEY=ssh-ed25519 AAAA... dev@laptop

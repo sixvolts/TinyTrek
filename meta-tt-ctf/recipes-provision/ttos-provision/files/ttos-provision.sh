@@ -155,6 +155,8 @@ fi
 # --- Parse (no shell eval -- safe for arbitrary PSK characters) -------------
 P_HOSTNAME=""; P_CAR_ID=""; P_SSID=""; P_PSK=""; P_COUNTRY=""; P_CHANNEL=""
 P_TXPOWER="500"; P_PWHASH=""; P_SSHKEY=""; P_ETH_ADDR=""
+P_VIN=""; P_ECU_SERIAL=""; P_FLEET_SALT=""; P_DATAID_L=""; P_DATAID_R=""
+P_CODE_C1=""; P_CODE_C2=""; P_CODE_C3=""
 
 # Strip a trailing inline comment (whitespace + # ... to EOL), then surrounding
 # whitespace and one layer of quotes. A '#' NOT preceded by whitespace is kept,
@@ -176,6 +178,19 @@ while IFS='=' read -r key val; do
         TTOS_CONSOLE_PW_HASH)   P_PWHASH=$val ;;
         TTOS_SSH_AUTHORIZED_KEY) P_SSHKEY=$val ;;
         TTOS_ETH_ADDRESS)       P_ETH_ADDR=$val ;;
+        # --- CTF challenge data. Validated below, then persisted with the rest of
+        # the file into $SRC (mode 600) where the CTF service reads it on every
+        # boot. Unlike the WiFi/console values these are NOT applied to any config
+        # file here -- they are read at runtime, so they must survive, not be
+        # consumed.
+        TTOS_VIN)               P_VIN=$val ;;
+        TTOS_ECU_SERIAL)        P_ECU_SERIAL=$val ;;
+        TTOS_FLEET_SALT)        P_FLEET_SALT=$val ;;
+        TTOS_DATAID_L)          P_DATAID_L=$val ;;
+        TTOS_DATAID_R)          P_DATAID_R=$val ;;
+        TTOS_CODE_C1)           P_CODE_C1=$val ;;
+        TTOS_CODE_C2)           P_CODE_C2=$val ;;
+        TTOS_CODE_C3)           P_CODE_C3=$val ;;
         *) log "ignoring unknown key: $key" ;;
     esac
 done < "$SRCFILE"
@@ -205,6 +220,49 @@ elif [ "$plen" -ge 8 ] && [ "$plen" -le 63 ]; then
 else
     fail "TTOS_WIFI_PSK must be an 8..63 char passphrase or 64 hex digits (got $plen chars)"
 fi
+
+# --- CTF challenge data: fail loud, never default ---------------------------
+# A car that boots with an empty VIN answers DID reads with nothing and silently
+# breaks C3 -- an unsolvable station that looks perfectly healthy. Refusing to
+# provision is the only failure mode anyone will notice in time.
+for pair in "TTOS_VIN=$P_VIN" "TTOS_ECU_SERIAL=$P_ECU_SERIAL" \
+            "TTOS_FLEET_SALT=$P_FLEET_SALT" \
+            "TTOS_DATAID_L=$P_DATAID_L" "TTOS_DATAID_R=$P_DATAID_R" \
+            "TTOS_CODE_C1=$P_CODE_C1" "TTOS_CODE_C2=$P_CODE_C2" "TTOS_CODE_C3=$P_CODE_C3"; do
+    v=${pair#*=}
+    [ -n "$v" ] || fail "missing required challenge key: ${pair%%=*} (regenerate with provisioning/render-fleet.py)"
+done
+
+# VIN: 17 chars, no I/O/Q per ISO 3779. The check digit is not verified here --
+# the generator computes it and fleet-table.csv is the source of truth.
+printf '%s' "$P_VIN" | grep -qE '^[A-HJ-NPR-Z0-9]{17}$' \
+    || fail "TTOS_VIN must be 17 chars, no I/O/Q (got '$P_VIN')"
+
+# CRC Data IDs: 0x0001..0xFFFE, and the two motors must differ -- identical Data
+# IDs would let a contestant forge one wheel's frames from the other's.
+for pair in "TTOS_DATAID_L=$P_DATAID_L" "TTOS_DATAID_R=$P_DATAID_R"; do
+    v=${pair#*=}
+    printf '%s' "$v" | grep -qiE '^0x[0-9a-f]{4}$' \
+        || fail "${pair%%=*} must be 0xNNNN (got '$v')"
+    if printf '%s' "$v" | grep -qiE '^0x(0000|ffff)$'; then
+        fail "${pair%%=*} must be 0x0001..0xFFFE (got '$v')"
+    fi
+done
+[ "$P_DATAID_L" != "$P_DATAID_R" ] || fail "TTOS_DATAID_L and TTOS_DATAID_R must differ"
+
+# Unlock codes: 8 chars, first char is the challenge number, remainder from the
+# retype-safe alphabet (no 0/O/1/I/L). These get read off a screen and typed back.
+for pair in "TTOS_CODE_C1=1:$P_CODE_C1" "TTOS_CODE_C2=2:$P_CODE_C2" "TTOS_CODE_C3=3:$P_CODE_C3"; do
+    n=${pair#*=}; n=${n%%:*}
+    v=${pair#*:}
+    printf '%s' "$v" | grep -qE "^${n}[23456789ABCDEFGHJKMNPQRSTVWXYZ]{7}$" \
+        || fail "${pair%%=*} must be '${n}' + 7 chars of 23456789ABCDEFGHJKMNPQRSTVWXYZ (got '$v')"
+done
+
+# Fleet salt: 32 hex chars (16 random bytes). Not secret -- it ships in the client
+# JS -- but a malformed one silently changes every derived service key.
+printf '%s' "$P_FLEET_SALT" | grep -qiE '^[0-9a-f]{32}$' \
+    || fail "TTOS_FLEET_SALT must be 32 hex chars"
 
 # Non-DFS 5 GHz channel guard (US set); warn but do not hard-fail on others.
 case " 36 40 44 48 149 153 157 161 " in
