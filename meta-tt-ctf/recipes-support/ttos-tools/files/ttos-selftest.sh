@@ -141,7 +141,7 @@ check_can can0 1   # DIAG: must be FD
 check_can can1 0   # DRIVE: must be classic -- FD here would bus-off the motor nodes
 
 # ---------------------------------------------------------------------------
-hdr "5. cangw gateway  (§4.1 go/no-go: cangw -L works, a rule takes effect)"
+hdr "5. cangw gateway  (go/no-go: cangw works; shipped DRIVE->DIAG policy is live)"
 if have cangw; then
     # Judge cangw -L by whether it PRODUCES A LISTING, not by exit status: it exits
     # non-zero even on success (measured: 36 while listing both rules), so the old
