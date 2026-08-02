@@ -28,15 +28,63 @@ beacon saying the 12 V rail is on.
 
 | LED | Meaning |
 |---|---|
+| 🔵 **solid blue** | **CAN controller never initialised** — board/SPI fault, retrying |
+| 🔵 **blink blue** | controller up, but **not one frame ever received** — bus/wiring |
 | 🟢 solid green | **READY** — heartbeat + 12 V both good, not moving |
 | 🟡 solid yellow | **ACTIVE** — propulsion commanded and running |
 | 🔴 **double**-blink red | no heartbeat from the Pi (12 V is fine) |
 | 🔴 **regular** blink red | no 12 V active (heartbeat is fine) |
-| 🔴 solid red | both missing — also the power-on state before anything is received |
+| 🔴 solid red | both missing |
 
-So: *blink pattern tells you which signal is missing; red-vs-green tells you if
-you're ready to drive.* A node that never leaves solid red is not receiving CAN at
-all — check its wiring/termination first.
+So: *blue means this node can't talk at all; red means it can hear the bus but the
+system isn't ready; blink pattern says which signal is missing.*
+
+**Blue is a board fault, red is a system fault.** Solid blue will not be fixed by
+any amount of cable work — the MCP2515 isn't answering over SPI. Blinking blue is
+the opposite: the controller is fine and nothing is reaching it, so check wiring,
+termination and bit rate. A healthy bus always carries the BMS beacon at 5 Hz, so
+"never received a frame" is always a real fault.
+
+### Why the blue states exist
+
+They were added on 2026-08-02 after a car burned an afternoon. `CAN.begin()` failed
+at power-on, the sketch printed to a serial port nobody was attached to and **carried
+on anyway**, and the node sat in configuration mode forever. In that state the
+controller is electrically passive: it neither acknowledges frames nor corrupts the
+bus. From the Pi everything looked healthy — another node was providing the ACK, so
+transmits succeeded and the error counters stayed at zero — while the motor node
+heard nothing. On the robot it showed as solid red, identical to a disconnected bus.
+
+Two fixes came out of it, both in the sketch rather than the vendored library:
+
+- **Settle, then retry.** The MCP2515 needs its oscillator running before it answers
+  over SPI (128 osc cycles plus crystal settling, up to milliseconds from cold), but
+  the library's `reset()` waits only 10 µs. So `begin()` can lose that race at cold
+  power-on and win it on a warm reset. The sketch now waits 50 ms before its first
+  attempt and **retries every second until it succeeds**, non-blocking.
+- **SPI at 4 MHz** instead of the library's 10 MHz default, which is the MCP2515's
+  absolute maximum and marginal over hand-wired jumpers.
+
+`begin()` does verify SPI communication (it reads `CANCTRL` back twice), so a
+success genuinely means the controller is there. It does **not** verify the crystal:
+bit timing is chosen from whatever `CAN_CLOCK_HZ` claims. An 8 MHz module told 16 MHz
+reports success and then runs at half rate — deaf, and it corrupts the bus with error
+frames. That last part is diagnostic: a wrong-crystal node *dirties* the bus, so if
+the Pi's error counters are clean the problem is not bit rate.
+
+For 8 MHz modules, build with:
+
+```bash
+./build.sh <fqbn> TinytrekLMotor --build-property "build.extra_flags=-DCAN_CLOCK_HZ=8000000"
+```
+
+### Serial status
+
+Each node prints its state every 2 s — `CAN=up rx=yes hb=ok 12v=on steps=0`, or the
+reason it is down. Deliberately periodic, not once at boot: these are native-USB
+boards, so **a reset drops the CDC connection** and anything printed during `setup()`
+is gone before a monitor can reattach. That is precisely why the original one-shot
+"Failed to initialize CAN BUS." message was never seen by anyone.
 
 The heartbeat is transmitted **unconditionally** by the CTF service layer. It used
 to ride the dashboard's drive gate, so a read-only car transmitted nothing and its
