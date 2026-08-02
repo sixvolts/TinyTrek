@@ -23,6 +23,18 @@ kas/*-secrets.yml
 ttos-provision.conf
 !ttos-provision.conf.example
 
+# Generated CTF fleet data (provisioning/). Same policy as above: these carry
+# console password hashes, CRC Data IDs, per-car unlock codes and WPA PSKs.
+# gen-fleet.py's docstring says "commit the output" -- we deliberately do NOT,
+# to stay consistent with the rule above. Back provisioning/ up OFF this repo;
+# losing fleet-table.csv means reflashing every node with new values.
+# The two scripts ARE tracked -- they are source, and render-fleet.py can
+# rebuild every derived artifact from fleet-table.csv deterministically.
+/provisioning/*
+!/provisioning/gen-fleet.py
+!/provisioning/render-fleet.py
+!/provisioning/README.md
+
 # Editor / OS cruft
 *.swp
 *~
