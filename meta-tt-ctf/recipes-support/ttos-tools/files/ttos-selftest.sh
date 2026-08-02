@@ -248,13 +248,20 @@ case "$VARIANT" in
     *) no "NOT the production image -- do not put this car on the floor" ;;
 esac
 
-# socketcand was removed 2026-08-02: it bridged both CAN buses to TCP 29536 with no
-# authentication, which bypassed every challenge. If it is somehow back, it must not
-# ship. (Also note it cannot work without a physical tap to ACK -- see the plan §C.)
-if have socketcand || systemctl list-unit-files 2>/dev/null | grep -q '^socketcand'; then
-    no "socketcand is present -- it must not ship on a competition car"
+# CAN-over-TCP servers must not ship. socketcand bridged both buses to TCP 29536
+# with no authentication, which bypassed every challenge; bcmserver, canlogserver
+# and cannelloni are the same class of thing. They ride along in can-utils-access
+# (which we need for cangw), so the image recipe deletes them at rootfs assembly --
+# this check is what catches that deletion silently breaking.
+CANSRV=""
+for b in socketcand bcmserver canlogserver cannelloni; do
+    have "$b" && CANSRV="$CANSRV $b"
+done
+systemctl list-unit-files 2>/dev/null | grep -q '^socketcand' && CANSRV="$CANSRV socketcand.service"
+if [ -n "$CANSRV" ]; then
+    no "unauthenticated CAN-over-TCP server(s) present:$CANSRV -- must not ship on a competition car"
 else
-    ok "socketcand absent (diagnostic access is the physical tap only)"
+    ok "no CAN-over-TCP servers (diagnostic access is the physical tap only)"
 fi
 
 # The kernel gateway is the whole basis of the DRIVE/DIAG separation.

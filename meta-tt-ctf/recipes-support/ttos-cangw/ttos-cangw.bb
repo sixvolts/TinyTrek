@@ -14,10 +14,17 @@ SRC_URI = " \
 
 inherit systemd allarch
 
-# cangw(1) ships in can-utils. CONFIG_CAN_GW=y is supplied by the kernel fragment
-# in recipes-kernel/linux (attached to linux-raspberrypi, which is the kernel that
-# is actually built here -- a linux-yocto bbappend would silently never apply).
-RDEPENDS:${PN} = "can-utils"
+# cangw(1) is packaged in can-utils-ACCESS, not the main can-utils package.
+# That subpackage also carries socketcand, bcmserver, canlogserver and cannelloni
+# -- every one of them an unauthenticated CAN-over-TCP server. None has a systemd
+# unit so none starts on its own, but they must not sit on a competition car; the
+# image recipe deletes them at rootfs assembly. Keep that deletion in step with
+# this dependency.
+#
+# CONFIG_CAN_GW=y is supplied by the kernel fragment in recipes-kernel/linux
+# (attached to linux-raspberrypi, which is the kernel that is actually built here
+# -- a linux-yocto bbappend would silently never apply).
+RDEPENDS:${PN} = "can-utils-access"
 
 SYSTEMD_SERVICE:${PN} = "ttos-cangw.service"
 SYSTEMD_AUTO_ENABLE = "enable"

@@ -63,3 +63,23 @@ ROOTFS_POSTPROCESS_COMMAND += "ttos_variant_marker; "
 ttos_variant_marker() {
     echo "TinyTrekOS-CTF (production)" > ${IMAGE_ROOTFS}${sysconfdir}/ttos-variant
 }
+
+# Strip the CAN-over-TCP servers that ride along in can-utils-access.
+#
+# We need that subpackage for cangw (the gateway policy is the whole basis of the
+# DRIVE/DIAG separation), but it also ships socketcand, bcmserver, canlogserver and
+# cannelloni -- every one an UNAUTHENTICATED network bridge to a CAN bus. Removing
+# the standalone socketcand recipe from IMAGE_INSTALL was therefore not enough: the
+# binary was still on the rootfs by a second route.
+#
+# None of them has a systemd unit, so none starts on its own and none is listening
+# on a shipped car. This is defence in depth: a contestant who gets a shell should
+# not find a ready-made drive-bus-to-TCP bridge sitting in PATH. ttos-selftest fails
+# if any of them reappears.
+ROOTFS_POSTPROCESS_COMMAND += "ttos_strip_can_servers; "
+ttos_strip_can_servers() {
+    rm -f ${IMAGE_ROOTFS}${bindir}/socketcand \
+          ${IMAGE_ROOTFS}${bindir}/bcmserver \
+          ${IMAGE_ROOTFS}${bindir}/canlogserver \
+          ${IMAGE_ROOTFS}${bindir}/cannelloni
+}
