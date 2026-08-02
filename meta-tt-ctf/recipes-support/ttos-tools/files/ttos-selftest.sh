@@ -74,7 +74,11 @@ else no "mcp251xfd: no controllers probed (check HAT seating, overlays, SPI)"; f
 [ -n "$DM" ] && printf '%s\n' "$DM" | tail -n 4 | sed 's/^/         /'
 
 # ---------------------------------------------------------------------------
-hdr "4. CAN interfaces  (§7: can0 classic 500k ERROR-ACTIVE; can1 FD 500k/1M)"
+# Both buses run CAN FD at 500k arbitration / 1 Mbit data since CTF phase 1: can0
+# (DIAG) was switched from classic so a routine can return a flag in one 64-byte
+# response with no ISO-TP. Role names, not numbers -- DRIVE is the HIGHER-numbered
+# interface here (can1), which is the opposite of the original design doc.
+hdr "4. CAN interfaces  (DRIVE=can1 and DIAG=can0, both FD 500k/1M)"
 check_can(){ # $1=iface  $2=expect_fd(0/1)
     ifc=$1; fd=$2
     if ! ip link show "$ifc" >/dev/null 2>&1; then no "$ifc does not exist"; return; fi
@@ -95,13 +99,17 @@ check_can(){ # $1=iface  $2=expect_fd(0/1)
     fi
     [ "$STATE" = "ERROR-ACTIVE" ] && ok "$ifc state ERROR-ACTIVE" || sk "$ifc state = ${STATE:-?} (ERROR-ACTIVE needs a wired, terminated bus)"
 }
-check_can can0 0
+check_can can0 1
 check_can can1 1
 
 # ---------------------------------------------------------------------------
 hdr "5. cangw gateway  (§4.1 go/no-go: cangw -L works, a rule takes effect)"
 if have cangw; then
-    if $SUDO cangw -L >/dev/null 2>&1; then
+    # Test cangw -L by whether it PRODUCES A LISTING, not by exit status: it returns
+    # non-zero even on success, which reported a working gateway as broken on every
+    # car. Confirmed 2026-08-02 -- section 12 counted 2 live rules from this same
+    # command while this check called it a failure.
+    if $SUDO cangw -L 2>/dev/null | grep -q 'cangw' || $SUDO cangw -L >/dev/null 2>&1; then
         ok "cangw -L runs"
         if ip link show can0 >/dev/null 2>&1 && ip link show can1 >/dev/null 2>&1; then
             $SUDO cangw -A -s can0 -d can1 -e >/dev/null 2>&1
@@ -122,9 +130,14 @@ if have cansend && have candump; then
         VF=$(mktemp 2>/dev/null || echo /tmp/vcan.$$)
         $SUDO candump -n 1 vcanTEST > "$VF" 2>/dev/null &
         CPID=$!
-        sleep 0.7                                   # let candump bind before sending
+        # INTEGER sleeps only. busybox sleep does not necessarily support fractional
+        # seconds, and when it does not it returns immediately -- so cansend fired
+        # before candump had bound, the frame went nowhere, and a perfectly healthy
+        # CAN stack was reported as broken. vcan creation itself was verified working
+        # on hardware while this check was failing (2026-08-02).
+        sleep 1                                     # let candump bind before sending
         $SUDO cansend vcanTEST 123#DEADBEEF 2>/dev/null
-        i=0; while [ "$i" -lt 10 ] && ! grep -qi DEADBEEF "$VF" 2>/dev/null; do sleep 0.2; i=$((i+1)); done
+        i=0; while [ "$i" -lt 5 ] && ! grep -qi DEADBEEF "$VF" 2>/dev/null; do sleep 1; i=$((i+1)); done
         $SUDO kill "$CPID" 2>/dev/null
         grep -qi DEADBEEF "$VF" 2>/dev/null && ok "vcan loopback: frame sent and received (stack + can-utils OK)" || no "vcan loopback: frame not received"
         rm -f "$VF"; $SUDO ip link del vcanTEST 2>/dev/null
@@ -140,7 +153,9 @@ hw_loop(){ # $1=iface $2=fdargs $3=frame
     $SUDO ip link set "$ifc" down 2>/dev/null
     # shellcheck disable=SC2086
     if $SUDO ip link set "$ifc" type can bitrate 500000 $fdargs loopback on 2>/dev/null && $SUDO ip link set "$ifc" up 2>/dev/null; then
-        OUT=$( ($SUDO timeout 2 candump -n 1 "$ifc" & sleep 0.3; $SUDO cansend "$ifc" "$frame"; wait) 2>/dev/null )
+        # candump's own -T (idle timeout, ms) rather than timeout(1): the minimal
+        # rootfs has no timeout binary. Integer sleep for busybox compatibility.
+        OUT=$( ($SUDO candump -T 3000 -n 1 "$ifc" & sleep 1; $SUDO cansend "$ifc" "$frame"; wait) 2>/dev/null )
         echo "$OUT" | grep -qi "${frame##*#}" && ok "$ifc hardware loopback OK ($frame)" || no "$ifc hardware loopback: no frame (controller/oscillator issue?)"
     else no "$ifc could not enter loopback mode"; fi
 }
