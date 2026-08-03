@@ -10,60 +10,44 @@ TinytrekBMS      BMS           Feather RP2040 CAN          0x115 in / 0x116 out
 
 ---
 
-## ⚠ THIS ARCHIVE CONTAINS SECRETS
+## No secrets in this archive
 
-`provisioning/firmware-constants.h` holds the fleet's Data IDs and C2/C3 unlock
-codes. Recovering a Data ID *is* Challenge 3. Keep this off the competition floor,
-off shared machines, and delete it when the fleet is flashed.
+Nothing here is confidential and nothing is per-car. The nodes receive their Data
+IDs, unlock codes and detector thresholds **from the Pi over CAN during
+provisioning**, and store them in flash.
 
 ---
 
-## Two build modes
-
-**Baseline** — `TTOS_CHALLENGE` unset. Message protection and detection compile out
-entirely. The car drives normally. Use this for drivetrain debugging, and for any
-node you are not yet ready to lock down.
+## One build, no car id
 
 ```sh
-./build.sh <fqbn>                      # all three
-./build.sh <fqbn> TinytrekLMotor       # one
-./build.sh <fqbn> TinytrekLMotor /dev/ttyACM0   # build + upload
+./build.sh <fqbn>                                  # all three
+./build.sh <fqbn> TinytrekLMotor                   # one
+./build.sh <fqbn> TinytrekLMotor /dev/cu.usbmodemXXXX   # build + upload
 ```
 
-**Challenge** — `TTOS_CHALLENGE=1`. Constants are staged from
-`provisioning/firmware-constants.h` into each sketch directory as `ttos-fleet.h`.
+**Three binaries for the entire fleet** — left motor, right motor, BMS. Build once,
+flash all 24 boards from the same artifacts. Any node is a drop-in for the same
+position on any car.
 
-```sh
-TTOS_CHALLENGE=1 ./build.sh <fqbn>
-TTOS_CHALLENGE=1 ./build.sh <fqbn> TinytrekBMS /dev/ttyACM0
-```
+### What happens after you flash
 
-**ONLY THE BMS NEEDS THE CHALLENGE BUILD.** Motor nodes stay BASELINE.
+A freshly flashed node has **nothing stored**, so it is permissive: it accepts the
+unprotected 6-byte drive command and the car drives normally. That is deliberate —
+a car that will not move until it has been provisioned is useless during setup.
 
-Message protection is enforced by the Pi at its two inbound gates -- the C2 bridge
-window and the C3 relay -- rather than by the motor nodes. That is not a weakening:
-those are the only two routes a contestant has to the drive bus, which is what the
-gateway policy exists to guarantee, so "you must recover the Data ID before the car
-will move" still holds exactly as before.
+The Pi provisions the nodes **automatically, on its first boot with a provisioning
+file present**. It bursts the values for about six seconds, the nodes write them to
+flash, and it never repeats. From then on nothing is transmitted at runtime, which
+is the point: the Data ID is what Challenge 3 exists to recover, and it has no
+business being on the bus while a contestant is on it.
 
-It is done that way because node-side enforcement cannot coexist with two hard
-requirements: an UNPROVISIONED car must drive, and the car must drive after
-Challenge 3. An unprovisioned Pi has no Data IDs -- they arrive in provision.src --
-so it cannot build a protected frame, and nodes that accept nothing else leave the
-car undrivable until it is provisioned.
+A node that has stored its values **ignores further config frames**. Anyone who
+reached the drive bus could otherwise hand the motors a Data ID they already knew.
+Re-provisioning means erasing or reflashing the node — deliberately physical.
 
-So: **8 BMS flashes, not 24.** Build once,
-flash all eight cars from the same artifacts. Any node is a drop-in for the same
-position on any car, so a car that dies mid-challenge can be swapped out without a
-team losing the work they have done.
-
-Per-car identity is all Pi-side and provisioned, never compiled: hostname, WiFi
-SSID/PSK/channel, VIN, ECU serial, console password. The VIN and serial still differ
-per car, so the C3 relay key differs per car too -- but re-deriving it on a
-replacement is a 30-second repeat of work the team has already done.
-
-**The staged `ttos-fleet.h` copies are secrets too.** Delete them when you are done:
-`rm -f firmware/*/ttos-fleet.h`.
+If you replace a node after that first boot, run `sudo ttos-provision-nodes` on the
+car to push the values again.
 
 ---
 
