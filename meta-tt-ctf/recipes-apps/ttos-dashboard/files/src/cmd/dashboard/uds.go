@@ -82,6 +82,14 @@ const (
 	// 0x111/0x113 passively would get the same corpus for free, and C2 would
 	// collapse from "interact with the car, then compose" into "watch and replay".
 	didSnapshot = 0xF1A0
+
+	// didTelematics returns the C3 relay's host:port. One of TWO discovery paths --
+	// the other is the C2 panel tier naming the interface outright. Two paths on
+	// purpose: a challenge whose door can only be found one way fails entirely for
+	// a team that misses that one way, and "guess the port" is not a skill.
+	// It says nothing about authentication; finding the door and opening it are
+	// separate problems.
+	didTelematics = 0xF1A1
 )
 
 // s3Timeout is the UDS S3 session timer: an extended session falls back to default
@@ -351,6 +359,12 @@ func udsReadDataByID(req []byte) []byte {
 			return negative(sidReadDataByID, nrcConditionsNotCorrect)
 		}
 		return append([]byte{sidReadDataByID + respOffset, req[1], req[2]}, []byte(ident.ECUSerial)...)
+
+	case didTelematics:
+		if relayEndpoint == "" {
+			return negative(sidReadDataByID, nrcConditionsNotCorrect)
+		}
+		return append([]byte{sidReadDataByID + respOffset, req[1], req[2]}, []byte(relayEndpoint)...)
 
 	case didSnapshot:
 		// Readable in the DEFAULT session, deliberately. C2's difficulty is the

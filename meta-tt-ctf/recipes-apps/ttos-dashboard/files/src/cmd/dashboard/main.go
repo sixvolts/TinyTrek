@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"math"
@@ -61,6 +62,7 @@ func main() {
 	ctfDiagIf := flag.String("ctf-diag", envOr("TTOS_CTF_DIAG_IF", "can0"), "DIAG bus: the contestant side tap, UDS server")
 	ctfIdentPath := flag.String("ctf-identity", envOr("TTOS_CTF_IDENTITY", "/etc/ttos/provision.src"), "per-car challenge identity (VIN, serial, Data IDs, codes)")
 	pivotStepsF := flag.Uint("pivot-steps", uint(envInt("TTOS_PIVOT_STEPS", 102)), "steps per wheel for the C1 pivot routine (102 = 45 deg at 0.4411 deg/step)")
+	relayAddrF := flag.String("relay-addr", envOr("TTOS_RELAY_ADDR", ""), "C3 telematics relay listen address (empty = disabled). Bind the AP address only -- 0.0.0.0 exposes the drive bus to the wired network")
 	pivotRPMF := flag.Uint("pivot-rpm", uint(envInt("TTOS_PIVOT_RPM", 50)), "rpm for the C1 pivot routine -- see the conflict documented in protect.go before changing")
 	flag.Parse()
 	pivotSteps = uint32(*pivotStepsF)
@@ -116,6 +118,15 @@ func main() {
 		// unless the self-test routine has opened the window; see bridge.go for why
 		// this is Go and not a cangw rule.
 		go bridgeLoop(*ctfDiagIf)
+
+		// C3 telematics relay. Disabled unless an address is configured, and the
+		// address should be the AP address: binding 0.0.0.0 would put an
+		// authenticated-but-network-reachable drive bus on the wired side too.
+		if *relayAddrF != "" {
+			go relayServe(*relayAddrF, *ctfDriveIf)
+		} else {
+			logf("info", "C3 telematics relay disabled (TTOS_RELAY_ADDR unset)")
+		}
 	} else {
 		logf("warn", "CTF service disabled (TTOS_CTF_ENABLE=0) -- no heartbeat, no diagnostic server")
 	}
@@ -658,15 +669,60 @@ func carInfo() map[string]string {
 // ---- http plumbing --------------------------------------------------------
 
 func uiHandler(webdir string) http.Handler {
+	var inner http.Handler
 	if webdir != "" {
 		log.Printf("serving UI from disk: %s", webdir)
-		return http.FileServer(http.Dir(webdir))
+		inner = http.FileServer(http.Dir(webdir))
+	} else {
+		sub, err := fs.Sub(embedded, "web")
+		if err != nil {
+			log.Fatalf("embed: %v", err)
+		}
+		inner = http.FileServer(http.FS(sub))
 	}
-	sub, err := fs.Sub(embedded, "web")
-	if err != nil {
-		log.Fatalf("embed: %v", err)
+	return saltSubstituter(inner)
+}
+
+// saltSubstituter rewrites the FLEET_SALT placeholder in index.html at serve time.
+//
+// The salt is PROVISIONED, not built in, so it can rotate without rebuilding the
+// image -- and it is not a secret: the challenge design deliberately ships the key
+// derivation to the client, because "auth logic shipped to the browser" is the real
+// bug class being taught. Baking it into the embedded asset at build time would
+// mean an image rebuild to rotate it, and a per-fleet image.
+//
+// One bundle is served to every tier. There are no tier-dependent assets, so the
+// transform is readable from the locked panel by design; ordering is still enforced
+// because the transform is useless without the VIN and serial, and those require
+// diagnostic-bus work.
+func saltSubstituter(inner http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p := r.URL.Path; p != "/" && p != "/index.html" {
+			inner.ServeHTTP(w, r)
+			return
+		}
+		rec := &bodyRecorder{ResponseWriter: w}
+		inner.ServeHTTP(rec, r)
+		out := strings.ReplaceAll(rec.buf.String(), "__TTOS_FLEET_SALT__", ident.FleetSalt)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Length", strconv.Itoa(len(out)))
+		w.WriteHeader(rec.status)
+		_, _ = io.WriteString(w, out)
+	})
+}
+
+type bodyRecorder struct {
+	http.ResponseWriter
+	buf    strings.Builder
+	status int
+}
+
+func (b *bodyRecorder) WriteHeader(code int) { b.status = code }
+func (b *bodyRecorder) Write(p []byte) (int, error) {
+	if b.status == 0 {
+		b.status = http.StatusOK
 	}
-	return http.FileServer(http.FS(sub))
+	return b.buf.Write(p)
 }
 
 func serveEvents(w http.ResponseWriter, r *http.Request) {

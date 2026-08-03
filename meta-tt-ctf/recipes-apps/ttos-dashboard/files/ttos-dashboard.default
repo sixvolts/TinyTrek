@@ -56,6 +56,20 @@ TTOS_DASH_TURN_RPM=100
 TTOS_DASH_KEEPALIVE_MS=150
 TTOS_DASH_STEP_CHUNK=100
 
+# ---- C3 telematics relay ---------------------------------------------------
+# Authenticated raw-CAN relay on the DRIVE bus. Empty = disabled.
+#
+# BIND THE AP ADDRESS, NEVER 0.0.0.0. The whole premise of C3 is that the relay is
+# reachable over the car's own WiFi and nowhere else; 0.0.0.0 would put an
+# internet-protocol path to the drive bus on the wired network too, which is the
+# exact hole socketcand was removed for. This must match TTOS_DASH_ADDR's host.
+#
+# 29537 is deliberately adjacent to socketcand's 29536 -- plausible for a
+# telematics service, and discoverable by a port scan or via DID 0xF1A1.
+# The key is SHA-256(vin:serial:fleet_salt)[:16]; see relay.go and the
+# deriveServiceKey() shipped in the panel JS.
+TTOS_RELAY_ADDR=192.168.244.1:29537
+
 # ---- C1 pivot routine ------------------------------------------------------
 # The UDS pivot routine (RoutineControl 0x0201) rotates the car in place and
 # returns the C1 unlock code. 102 steps = 45 deg at 0.4411 deg/step; the arc does
