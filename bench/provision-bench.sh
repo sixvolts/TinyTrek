@@ -59,6 +59,17 @@ TTOS_CODE_C2=$C2
 TTOS_CODE_C3=$C3
 EOF
 
+
+# Preflight: sudo on the DUT needs a password, and which password depends on
+# whether the car has been provisioned. Factory/test mode is ttos/ttos;
+# provisioning replaces it with the per-car console password. Fail here with a
+# usable message rather than deep inside an scp or a systemctl.
+if ! $SSH "$DUT_USER@$DUT" "echo '$DUT_PASS' | sudo -S -p '' true" 2>/dev/null; then
+    printf 'cannot sudo on %s as %s.\n' "$DUT" "$DUT_USER" >&2
+    printf 'If this car has been PROVISIONED the factory password no longer works:\n' >&2
+    printf '  export DUT_PASS=<console password for this car, provisioning/OPERATOR-SECRETS.md>\n' >&2
+    exit 1
+fi
 echo "staging identity for car $CAR_ID ($VIN) on $DUT"
 scp -q -o BatchMode=yes "$TMP" "$DUT_USER@$DUT:/tmp/.provsrc"
 rm -f "$TMP"

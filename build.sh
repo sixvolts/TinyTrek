@@ -32,7 +32,13 @@ fi
 
 KAS_FILE="${1:-kas/ttos-ctf.yml}"
 
-exec docker run --rm -it \
+# -t only when stdout is a terminal. With it unconditionally, any non-interactive
+# run -- CI, nohup, a background build -- dies instantly with "the input device is
+# not a TTY" AND EXITS 0, so it reads as a successful build that produced nothing.
+TTY_FLAGS=(-i)
+[ -t 1 ] && TTY_FLAGS=(-i -t)
+
+exec docker run --rm "${TTY_FLAGS[@]}" \
     -v "$REPO_DIR":"$REPO_DIR" \
     -v "$YOCTO_DIR":/yocto \
     --workdir "$REPO_DIR" \
