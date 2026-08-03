@@ -20,11 +20,27 @@ provisioning**, and store them in flash.
 
 ## One build, no car id
 
+`build.sh` points the compiler at the vendored libraries in `libraries/`, so nothing
+has to be installed globally and everyone builds against the same versions:
+
 ```sh
 ./build.sh <fqbn>                                  # all three
 ./build.sh <fqbn> TinytrekLMotor                   # one
 ./build.sh <fqbn> TinytrekLMotor /dev/cu.usbmodemXXXX   # build + upload
 ```
+
+### Building from the Arduino IDE instead
+
+The IDE has no equivalent of `--libraries` — it only looks in your sketchbook — so
+the vendored copies have to be linked in first, or you get
+`fatal error: FlashAsEEPROM.h: No such file or directory` (and the same for `CAN.h`
+and `Adafruit_NeoPixel.h`):
+
+```sh
+./link-libraries.sh     # symlinks CAN, Adafruit_NeoPixel and FlashStorage
+```
+
+Then restart the IDE so it rescans.
 
 **Three binaries for the entire fleet** — left motor, right motor, BMS. Build once,
 flash all 24 boards from the same artifacts. Any node is a drop-in for the same
