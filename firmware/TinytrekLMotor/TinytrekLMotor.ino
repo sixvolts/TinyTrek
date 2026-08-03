@@ -4,8 +4,12 @@ Microcontroller: Adafruit QT Py SAMD21 + MCP2515 CAN (CS=3, INT=0).
 Identical to TinytrekRMotor except for canId -- keep the two in sync.
 */
 
-#include <CAN.h>
-#include <Adafruit_NeoPixel.h>
+// Library sources live in this sketch folder so the Arduino IDE compiles them
+// with no setup: open the .ino, pick the board, upload. QUOTED includes, not
+// angle brackets -- the IDE adds the sketch directory to the quoted search
+// path only, so <CAN.h> would not be found here.
+#include "CAN.h"
+#include "Adafruit_NeoPixel.h"
 
 const int dirPin = 4;
 const int stepPin = 5;
@@ -59,7 +63,7 @@ bool          driverOn   = false;
 // 6-byte command, because an unprovisioned car must still drive. That is fail-open,
 // and it is covered -- the Pi's bridge and relay, the only two routes a contestant
 // has onto this bus, validate protection independently.
-#include <FlashAsEEPROM.h>
+#include "FlashAsEEPROM.h"
 
 const long NODE_CFG_ID = 0x101;
 const uint8_t CFG_MAGIC = 0xC7;   // marks a written record; anything else = empty

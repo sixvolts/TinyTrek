@@ -18,81 +18,52 @@ provisioning**, and store them in flash.
 
 ---
 
-## One build, no car id
+## Flashing a node
 
-`build.sh` points the compiler at the vendored libraries in `libraries/`, so nothing
-has to be installed globally and everyone builds against the same versions:
+Open the sketch in the Arduino IDE, pick the board, upload. That is all.
 
-```sh
-./build.sh <fqbn>                                  # all three
-./build.sh <fqbn> TinytrekLMotor                   # one
-./build.sh <fqbn> TinytrekLMotor /dev/cu.usbmodemXXXX   # build + upload
+```
+TinytrekLMotor/TinytrekLMotor.ino    →  Adafruit QT Py SAMD21   (left motor)
+TinytrekRMotor/TinytrekRMotor.ino    →  Adafruit QT Py SAMD21   (right motor)
+TinytrekBMS/TinytrekBMS.ino          →  Adafruit Feather RP2040 CAN
 ```
 
-### Building from the Arduino IDE instead
+**No libraries to install and nothing to configure.** Each sketch folder carries the
+library sources it needs — the CAN driver, the NeoPixel driver, and on the motors the
+SAMD flash-as-EEPROM code — so the IDE compiles them as part of the sketch. That is
+also why the includes are quoted rather than angle-bracketed: the IDE only searches
+the sketch folder for quoted includes.
 
-The IDE has no equivalent of `--libraries` — it only looks in your sketchbook — so
-the vendored copies have to be linked in first, or you get
-`fatal error: FlashAsEEPROM.h: No such file or directory` (and the same for `CAN.h`
-and `Adafruit_NeoPixel.h`):
+You do need the board support packages, from Boards Manager:
 
-```sh
-./link-libraries.sh     # symlinks CAN, Adafruit_NeoPixel and FlashStorage
-```
+- **Adafruit SAMD Boards** for the QT Py motors
+- **Raspberry Pi Pico/RP2040** (Earle Philhower) for the Feather CAN BMS
 
-Then restart the IDE so it rescans.
+`build.sh` batch-builds all three from a terminal if you would rather not click
+through the IDE three times per car. It is optional and nothing depends on it.
 
-**Three binaries for the entire fleet** — left motor, right motor, BMS. Build once,
-flash all 24 boards from the same artifacts. Any node is a drop-in for the same
-position on any car.
+**Three binaries for the entire fleet** — the same left-motor, right-motor and BMS
+images go on all eight cars. No per-car build, no car id anywhere.
 
 ### What happens after you flash
 
 A freshly flashed node has **nothing stored**, so it is permissive: it accepts the
-unprotected 6-byte drive command and the car drives normally. That is deliberate —
-a car that will not move until it has been provisioned is useless during setup.
+unprotected drive command and the car drives normally. That is deliberate — a car
+that will not move until it has been provisioned is useless during setup.
 
 The Pi provisions the nodes **automatically, on its first boot with a provisioning
 file present**. It bursts the values for about six seconds, the nodes write them to
-flash, and it never repeats. From then on nothing is transmitted at runtime, which
-is the point: the Data ID is what Challenge 3 exists to recover, and it has no
-business being on the bus while a contestant is on it.
+flash, and it never repeats. Nothing is transmitted at runtime after that: the Data
+ID is what Challenge 3 exists to recover, and it has no business being on the bus
+while a contestant is on it.
 
-A node that has stored its values **ignores further config frames**. Anyone who
-reached the drive bus could otherwise hand the motors a Data ID they already knew.
-Re-provisioning means erasing or reflashing the node — deliberately physical.
-
-If you replace a node after that first boot, run `sudo ttos-provision-nodes` on the
-car to push the values again.
+A node that has stored its values **ignores further config frames**, so nobody who
+reaches the drive bus can overwrite them. If you replace a node later, run
+`sudo ttos-provision-nodes` on that car to push the values again.
 
 ---
 
-## FQBNs
-
-Use your board's actual FQBN. What I compile-tested with:
-
-```
-motors   arduino:samd:mkrzero                  (SAMD21 proxy — see below)
-BMS      rp2040:rp2040:adafruit_feather_can
-```
-
-The motor nodes are **Adafruit QT Py SAMD21**; the correct FQBN for them is
-`adafruit:samd:adafruit_qtpy_m0` once the Adafruit SAMD core is installed. I used
-`arduino:samd:mkrzero` because it is the same architecture and toolchain and was
-available — it proves the code compiles for SAMD, **not** that the QT Py pin
-definitions resolve. If `PIN_NEOPIXEL` or the CAN pins fail to compile on the real
-FQBN, that is why, and it is a board-variant issue rather than a logic one.
-
-If your MCP2515 boards use an 8 MHz crystal rather than 16:
-
-```sh
-TTOS_CHALLENGE=1 ./build.sh <fqbn> TinytrekLMotor \
-  --build-property "build.extra_flags=-DCAN_CLOCK_HZ=8000000"
-```
-
----
-
-## What the challenge build changes
+## What the firmware does
 
 **Motors** — a drive command must be the 8-byte protected form,
 `[steps u32 BE][dir][rpm][nonce][crc8]`, with `crc8` over bytes 0..6 keyed by this

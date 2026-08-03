@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Build the TinyTrek node firmware against the VENDORED CAN library (no global
-# library install needed). Requires arduino-cli.
+# Batch-build the node firmware from a terminal. OPTIONAL -- the normal way to
+# flash a node is to open its .ino in the Arduino IDE, pick the board, and upload.
+# Each sketch folder carries its own library sources, so the IDE needs no setup.
+#
+# This exists for building all three at once without clicking through the IDE.
+# Requires arduino-cli.
 #
 #   ./build.sh <fqbn> [sketch]
 #     ./build.sh arduino:avr:uno                 # build all three
@@ -8,7 +12,7 @@
 #     ./build.sh arduino:avr:uno TinytrekBMS <port>   # build + upload
 #
 # The FQBN must match your node board (e.g. arduino:avr:uno). The key bit is
-# --libraries "$HERE/libraries", which points the compiler at firmware/libraries/CAN
+#, which points the compiler at firmware/libraries/CAN
 # instead of ~/Documents/Arduino/libraries.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,9 +39,9 @@ EXTRA_FLAGS=()
 
 for s in $SKETCHES; do
   echo "== compiling $s ($FQBN) =="
-  arduino-cli compile --fqbn "$FQBN" --libraries "$HERE/libraries" "${EXTRA_FLAGS[@]}" "$HERE/$s"
+  arduino-cli compile --fqbn "$FQBN" "${EXTRA_FLAGS[@]}" "$HERE/$s"
   if [ -n "$PORT" ]; then
     echo "== uploading $s -> $PORT =="
-    arduino-cli upload -p "$PORT" --fqbn "$FQBN" --libraries "$HERE/libraries" "$HERE/$s"
+    arduino-cli upload -p "$PORT" --fqbn "$FQBN" "$HERE/$s"
   fi
 done

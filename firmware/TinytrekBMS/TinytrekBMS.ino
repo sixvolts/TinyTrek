@@ -1,5 +1,9 @@
-#include <CAN.h>
-#include <Adafruit_NeoPixel.h>
+// Library sources live in this sketch folder so the Arduino IDE compiles them
+// with no setup: open the .ino, pick the board, upload. QUOTED includes, not
+// angle brackets -- the IDE adds the sketch directory to the quoted search
+// path only, so <CAN.h> would not be found here.
+#include "CAN.h"
+#include "Adafruit_NeoPixel.h"
 
 // --- CAN IDs ---
 int canId = 0x115;         // RX: power command  [0x01]=on / [0x02]=off
