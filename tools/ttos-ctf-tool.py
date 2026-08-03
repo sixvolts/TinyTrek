@@ -542,6 +542,25 @@ def cmd_probe(args):
         if f and f.id == ID_RESP:
             reply = f
 
+    # BURST TEST -- only meaningful if nothing replied.
+    #
+    # A single clean transmit is ambiguous: "sent and acknowledged" and "never
+    # actually left the adapter" both look like a healthy bus, because no
+    # transmission means no errors. A burst removes the ambiguity. Every frame that
+    # nobody acknowledges pushes the transmit error counter up by 8, so 50 of them
+    # takes an isolated controller past 256 and into BUS-OFF. If the bus is still
+    # clean after that, the frames genuinely went out and something genuinely
+    # acknowledged them.
+    if reply is None:
+        for _ in range(50):
+            try:
+                tp.send(Frame(ID_PHYS, probe_req.ljust(8, b"\x00")))
+            except OSError:
+                break
+        time.sleep(0.3)
+        while tp.recv(0.05):
+            pass
+
     st = tp.status() if hasattr(tp, "status") else 0
     bits = [n for n, v in (("BUSLIGHT", 0x04), ("BUSHEAVY/WARNING", 0x08),
                            ("BUSOFF", 0x10), ("BUSPASSIVE", 0x40000))
@@ -557,8 +576,10 @@ def cmd_probe(args):
         note("alone on the wire. Check that CAN-H/CAN-L are on the diagnostic pair")
         note("and not swapped, and that the bus is terminated at both ends.")
     else:
-        bad("no answer, but the bus is electrically healthy")
-        note("Something acknowledged the frame, so a node IS physically there and")
+        bad("no answer, and the bus stayed clean through a 50-frame burst")
+        note("Fifty unacknowledged frames would have driven this controller to")
+        note("BUS-OFF, so the frames really are going out and something really is")
+        note("acknowledging them: a node IS physically there and")
         note("the wiring and bit timing are fine -- it simply did not reply. Three")
         note("things cause that, in order of likelihood:")
         note("")
