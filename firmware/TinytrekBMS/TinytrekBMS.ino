@@ -5,6 +5,70 @@
 int canId = 0x115;         // RX: power command  [0x01]=on / [0x02]=off
 int statusId = 0x116;      // TX: battery telemetry (Vbat millivolts, uint16 big-endian)
 
+// ---- CTF challenge layer ---------------------------------------------------
+// The BMS doubles as the DRIVE-bus MONITOR. It watches the motor command traffic
+// it is already receiving and emits a flag frame when it sees a signature no
+// legitimate interface produces. Nothing here transmits unless a detector is both
+// ARMED and triggered, and a baseline build compiles all of it out.
+//
+// These rules were prototyped and tuned on the bench against real timing before
+// being brought here (bench/vehicle-emulator.py, bench/test-detectors.py) --
+// eight RP2040s are the slowest thing in this project to iterate on.
+#if defined(__has_include)
+#  if __has_include("ttos-fleet.h")
+#    include "ttos-fleet.h"
+#  endif
+#endif
+#ifndef TTOS_CHALLENGE
+#  define TTOS_CHALLENGE 0
+#endif
+
+#if TTOS_CHALLENGE
+const long HEARTBEAT_ID = 0x100;   // RX: [seq][armFlags]
+const long L_MOTOR_ID   = 0x111;   // RX: monitored, never transmitted
+const long R_MOTOR_ID   = 0x113;
+const long C2_FLAG_ID   = 0x7D1;   // TX: C2 unlock code, 8 ASCII
+const long C3_FLAG_ID   = 0x7D2;   // TX: C3 unlock code, 8 ASCII
+
+// ARM MASK, mirrored from heartbeat byte 1. Bit SET = detector ARMED.
+//
+// POSITIVE ARMING, not "redeemed" bits, and the direction is the whole point.
+// With redeemed-semantics a zero byte would mean ARMED, so any failure -- a Pi
+// bug, a short frame, old firmware, a dropped heartbeat -- would leave detection
+// live and the car would leak its unlock codes during ordinary driving. With
+// arm-semantics those same failures leave detection DISARMED: the challenge does
+// not fire, someone reports "this station is broken", and it gets fixed.
+// A dead station is recoverable. A silently leaked flag is not.
+const uint8_t ARM_C2 = 0x01;
+const uint8_t ARM_C3 = 0x02;
+const unsigned long HEARTBEAT_TIMEOUT_MS = 1000;  // stale heartbeat -> disarmed
+
+// Detection thresholds. C3_COUNT/C3_WINDOW_MS are specified; C2_PAIR_WINDOW_MS is
+// not, and was chosen on the bench: the Pi commands both wheels inside one 150 ms
+// keepalive cycle, so 250 ms covers a real pair with margin while staying too tight
+// to accidentally pair two unrelated single-wheel commands.
+const unsigned long C2_PAIR_WINDOW_MS = 250;
+const unsigned long HOLD_MS           = 1000;   // condition "still true" after last hit
+const uint8_t       C3_COUNT          = 15;     // consecutive qualifying commands
+const unsigned long C3_WINDOW_MS      = 3000;
+const uint8_t       PIVOT_RPM         = 50;     // the ONLY rpm legitimate locked traffic uses
+const unsigned long FLAG_EMIT_MS      = 500;    // 2 Hz while the condition holds
+
+uint8_t       armMask = 0;
+unsigned long lastHeartbeatMs = 0;
+bool          haveHeartbeat = false;
+
+uint8_t       lastDir[2]  = {0, 0};      // [0]=L, [1]=R
+uint8_t       lastRpm[2]  = {0, 0};
+unsigned long lastCmdMs[2] = {0, 0};
+
+unsigned long c2HoldUntil = 0;
+unsigned long c3HoldUntil = 0;
+unsigned long c3Hits[C3_COUNT];          // ring of qualifying-command timestamps
+uint8_t       c3Head = 0, c3Len = 0;
+unsigned long lastFlagMs = 0;
+#endif  // TTOS_CHALLENGE
+
 // --- Battery sense (A1) ------------------------------------------------------
 // 120k high-side / 40.2k low-side divider (0.5%), fed to A1.
 //   Vadc = Vbat * 40.2 / (120 + 40.2)  ->  Vbat = Vadc * (160.2 / 40.2) = Vadc * 3.985
@@ -130,6 +194,50 @@ long readVbatMv() {
   return vbatMv;
 }
 
+#if TTOS_CHALLENGE
+// noteCommand folds one observed motor command into the detector state.
+// idx 0 = left, 1 = right.
+static void noteCommand(uint8_t idx, uint8_t dir, uint8_t rpm) {
+  unsigned long now = millis();
+  lastDir[idx] = dir; lastRpm[idx] = rpm; lastCmdMs[idx] = now;
+  if (dir == 0x00) { c3Len = 0; c3Head = 0; return; }   // an explicit stop breaks the run
+
+  uint8_t other = idx ^ 1;
+  bool sameDirPair = lastCmdMs[other] != 0
+                  && lastDir[other] == dir
+                  && (now - lastCmdMs[other]) <= C2_PAIR_WINDOW_MS;
+
+  // C2: both wheels commanded the SAME way inside a short window. That is a
+  // translation, and no legitimate interface commands one while the panel is
+  // locked -- the pivot always drives the wheels in OPPOSITE directions.
+  if ((armMask & ARM_C2) && sameDirPair) c2HoldUntil = now + HOLD_MS;
+
+  // C3: SUSTAINED same-dir commanding at an rpm legitimate traffic never uses.
+  //
+  // The same-dir condition is NOT optional. Keying on rpm alone passes every
+  // positive test and then fires 0x7D2 on the car's OWN pivot routine the moment
+  // the pivot rpm is changed -- leaking the C3 code before anyone attempts the
+  // challenge. It is rpm AND direction, always.
+  if (armMask & ARM_C3) {
+    if (sameDirPair && rpm != PIVOT_RPM) {
+      if (c3Len < C3_COUNT) { c3Hits[(c3Head + c3Len) % C3_COUNT] = now; c3Len++; }
+      else { c3Hits[c3Head] = now; c3Head = (c3Head + 1) % C3_COUNT; }
+      if (c3Len == C3_COUNT && (now - c3Hits[c3Head]) <= C3_WINDOW_MS) {
+        c3HoldUntil = now + HOLD_MS;
+      }
+    } else {
+      c3Len = 0; c3Head = 0;    // "CONSECUTIVE": anything else breaks the run
+    }
+  }
+}
+
+static void emitFlag(long id, const char* code) {
+  CAN.beginPacket(id);
+  for (uint8_t i = 0; i < 8; i++) CAN.write(code[i] ? code[i] : 0x00);
+  CAN.endPacket();
+}
+#endif
+
 void loop() {
   int packetSize = CAN.parsePacket();
 
@@ -143,6 +251,41 @@ void loop() {
       powerOff();
     }
   }
+#if TTOS_CHALLENGE
+  else if (packetSize > 0) {
+    long rxId = CAN.packetId();
+    int  rxDlc = CAN.packetDlc();
+    uint8_t rb[8] = {0};
+    CAN.readBytes((char*)rb, rxDlc);
+
+    if (rxId == HEARTBEAT_ID) {
+      lastHeartbeatMs = millis();
+      haveHeartbeat = true;
+      // DLC < 2 means no flags field, so no arming information -> DISARMED.
+      armMask = (rxDlc >= 2) ? rb[1] : 0;
+    } else if (rxId == L_MOTOR_ID || rxId == R_MOTOR_ID) {
+      // Monitor ONLY. The BMS never validates the CRC and never acts on these --
+      // it is watching the shape of the traffic, not obeying it. Frames the motors
+      // will silently reject still count, which is correct: a contestant hammering
+      // the bus with bad CRCs is still commanding, and the signature is the intent.
+      if (rxDlc >= 6) noteCommand(rxId == L_MOTOR_ID ? 0 : 1, rb[4], rb[5]);
+    }
+  }
+
+  // Stale heartbeat -> disarm. Fail-safe direction, same 1 s timeout the motor
+  // nodes already use.
+  if (haveHeartbeat && (millis() - lastHeartbeatMs) >= HEARTBEAT_TIMEOUT_MS) armMask = 0;
+
+  // Emit at 2 Hz while a condition holds, rather than once when it trips. A
+  // single-shot emission would make the challenge a coin flip on whether the
+  // contestant happened to be capturing at that instant; repeating it means
+  // someone who solved it without a sniffer running can simply do it again.
+  if (millis() - lastFlagMs >= FLAG_EMIT_MS) {
+    lastFlagMs = millis();
+    if ((armMask & ARM_C2) && millis() < c2HoldUntil) emitFlag(C2_FLAG_ID, TTOS_CODE_C2);
+    if ((armMask & ARM_C3) && millis() < c3HoldUntil) emitFlag(C3_FLAG_ID, TTOS_CODE_C3);
+  }
+#endif
 
   // Low-voltage cutoff, debounced so motor-inrush sag doesn't cut the rail.
   // Latch only after the pack stays below cutoff for LVC_TRIP_MS continuously;

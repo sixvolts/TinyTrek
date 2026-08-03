@@ -111,6 +111,11 @@ func main() {
 		}
 
 		go udsServe(*ctfDiagIf)
+
+		// C2 inbound path. Reads the DIAG bus continuously but forwards nothing
+		// unless the self-test routine has opened the window; see bridge.go for why
+		// this is Go and not a cangw rule.
+		go bridgeLoop(*ctfDiagIf)
 	} else {
 		logf("warn", "CTF service disabled (TTOS_CTF_ENABLE=0) -- no heartbeat, no diagnostic server")
 	}
@@ -346,6 +351,13 @@ type statusEvent struct {
 	WiFi    string `json:"wifi"` // up|down|absent|n/a
 	Eth     string `json:"eth"`
 	V12     string `json:"v12"` // active|inactive
+
+	// Bridging is C2's FAIRNESS TELL. The panel's indicator flickers to enabled
+	// while the self-test holds the inbound path open, so a contestant can see
+	// that something happened and correlate it with what they just sent. Without
+	// it the window is invisible and the challenge becomes guess-the-timing.
+	// It lives in the BASE (locked) tier for that reason -- do not gate it.
+	Bridging string `json:"bridging"` // enabled|disabled
 }
 
 func statusLoop(wifiIf, ethIf string, demo bool) {
@@ -358,7 +370,11 @@ func statusLoop(wifiIf, ethIf string, demo bool) {
 }
 
 func gatherStatus(wifiIf, ethIf string, demo bool) statusEvent {
-	s := statusEvent{Type: "status", USonic: "unknown", Camera: "unknown"}
+	s := statusEvent{Type: "status", USonic: "unknown", Camera: "unknown",
+		Bridging: "disabled"}
+	if bridgeOpen() {
+		s.Bridging = "enabled"
+	}
 	s.WiFi = linkState(wifiIf)
 	s.Eth = linkState(ethIf)
 	// Prefer the BMS's own reported rail state over what we commanded: if the BMS
@@ -511,6 +527,10 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 	switch body.Cmd {
 	case "stop":
 		// e-stop: clear both motor buffers (dir 0x00) AND cut the 12V rail.
+		// Also slam the inbound bridge shut. An e-stop that left a 5 s window open
+		// would let queued contestant frames re-command the wheels immediately after
+		// the operator hit stop, which is the one moment that must be absolute.
+		closeBridge()
 		setPower(false)
 		frames = []canbus.Frame{
 			motorFrame(idLMotor, 0x00, 0, straightRPM),

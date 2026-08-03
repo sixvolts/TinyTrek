@@ -44,6 +44,43 @@ bool          driverOn   = false;
 //   0x100 heartbeat from the Pi  : [seq][flags]        -- "the Pi is alive + in control"
 //   0x116 beacon from the BMS    : [v_hi][v_lo][pwr][flags] -- "12V rail is really on"
 // pwr: 0x01 = 12V on, 0x02 = off (same encoding as the 0x115 command).
+// ---- per-car challenge constants -------------------------------------------
+// Staged by build.sh from provisioning/firmware-constants.h when TTOS_CAR is set.
+// Without it this compiles as BASELINE firmware: no CRC checking, drives normally.
+#if defined(__has_include)
+#  if __has_include("ttos-fleet.h")
+#    include "ttos-fleet.h"
+#  endif
+#endif
+#ifndef TTOS_CHALLENGE
+#  define TTOS_CHALLENGE 0
+#endif
+#if TTOS_CHALLENGE && !defined(TTOS_MY_DATAID)
+#  define TTOS_MY_DATAID  TTOS_DATAID_R
+#endif
+
+// CRC-8/SAE-J1850 (poly 0x1D, init 0xFF, xorout 0xFF) keyed by a 16-bit Data ID
+// that is NEVER transmitted, AUTOSAR E2E Profile 1 style: the Data ID is prefixed
+// LOW BYTE FIRST, then the covered payload bytes.
+//
+// MUST MATCH cmd/dashboard/protect.go BYTE FOR BYTE. If the two ever diverge the
+// car rejects every command in silence, which is indistinguishable from a dead bus
+// -- so verify with bench/test-uds.py (case D3b) after any change to either side.
+// Check value: crc8J1850Keyed over "123456789" with no key is 0x4B.
+static uint8_t crc8J1850Keyed(const uint8_t* data, uint8_t len, uint16_t dataId) {
+  uint8_t crc = 0xFF;
+  uint8_t pre[2] = { (uint8_t)(dataId & 0xFF), (uint8_t)(dataId >> 8) };
+  for (uint8_t i = 0; i < 2; i++) {
+    crc ^= pre[i];
+    for (uint8_t b = 0; b < 8; b++) crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x1D) : (uint8_t)(crc << 1);
+  }
+  for (uint8_t i = 0; i < len; i++) {
+    crc ^= data[i];
+    for (uint8_t b = 0; b < 8; b++) crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x1D) : (uint8_t)(crc << 1);
+  }
+  return crc ^ 0xFF;
+}
+
 const long HEARTBEAT_ID  = 0x100;
 const long BMS_BEACON_ID = 0x116;
 // Both are sent at ~5 Hz, so 1 s is 5 missed messages -- slow enough not to
@@ -252,19 +289,40 @@ void loop() {
     CAN.readBytes((char*)buf, dlc);
 
     if (id == canId) {
-      long add = ((long)buf[0] << 24) | ((long)buf[1] << 16) | ((long)buf[2] << 8) | (long)buf[3];
-      uint8_t d = buf[4];
-      driveRpm = (dlc >= 6 && buf[5] > 0) ? buf[5] : rpm;   // optional speed byte
-      if (driveRpm < 1) driveRpm = 1;
+      // ---- message protection ---------------------------------------------
+      // On a challenge build a command must be the 8-byte protected form,
+      // [steps u32 BE][dir][rpm][nonce][crc8], with crc8 over bytes 0..6 keyed by
+      // this motor's compiled-in Data ID. On a baseline build every frame is
+      // accepted and the 6-byte legacy form still drives the car.
+      //
+      // REJECTION IS ABSOLUTELY SILENT: no error frame, no reply, no serial print,
+      // no LED change, no counter a contestant can observe. Any difference between
+      // "rejected" and "never arrived" is an ORACLE -- it would let someone
+      // brute-force the CRC byte by watching for the frame that stops being
+      // ignored, turning C2 from analysis into 256 transmissions.
+      //
+      // Short frames are rejected too. Accepting the unprotected form here would
+      // make the whole scheme optional to an attacker.
+      bool accept = true;
+#if TTOS_CHALLENGE
+      accept = (dlc == 8) && (crc8J1850Keyed(buf, 7, TTOS_MY_DATAID) == buf[7]);
+#endif
 
-      if (d == 0x00) {
-        stepsLeft = 0;                                    // explicit stop / clear
-      } else {
-        int newDir = (d == 0x02) ? BACKWARD : FORWARD;
-        if (newDir != driveDir) stepsLeft = 0;            // direction change clears
-        driveDir = newDir;
-        stepsLeft += add;
-        if (stepsLeft > STEPS_MAX) stepsLeft = STEPS_MAX; // cap coast/overrun
+      if (accept) {
+        long add = ((long)buf[0] << 24) | ((long)buf[1] << 16) | ((long)buf[2] << 8) | (long)buf[3];
+        uint8_t d = buf[4];
+        driveRpm = (dlc >= 6 && buf[5] > 0) ? buf[5] : rpm;   // optional speed byte
+        if (driveRpm < 1) driveRpm = 1;
+
+        if (d == 0x00) {
+          stepsLeft = 0;                                    // explicit stop / clear
+        } else {
+          int newDir = (d == 0x02) ? BACKWARD : FORWARD;
+          if (newDir != driveDir) stepsLeft = 0;            // direction change clears
+          driveDir = newDir;
+          stepsLeft += add;
+          if (stepsLeft > STEPS_MAX) stepsLeft = STEPS_MAX; // cap coast/overrun
+        }
       }
     } else if (id == HEARTBEAT_ID) {
       lastHeartbeatMs = millis();

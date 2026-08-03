@@ -54,6 +54,11 @@ const (
 	nrcSecurityAccessDenied        = 0x33
 	nrcServiceNotSupported         = 0x11
 	nrcServiceNotSupportedInActive = 0x7F
+	// 0x7E subFunctionNotSupportedInActiveSession -- the self-test's answer in the
+	// default session. Distinct from 0x7F above, which gates DID 0xF18C. Both say
+	// "wrong session", which is the point: the same lesson is taught twice, once
+	// on a read and once on a routine.
+	nrcSubFuncNotSupportedInActive = 0x7E
 )
 
 // Diagnostic sessions.
@@ -66,6 +71,17 @@ const (
 const (
 	didVIN       = 0xF190 // 17 chars, default session -- readable by design
 	didECUSerial = 0xF18C // extended session only; this is what ties C3 to the C2 skill
+
+	// didSnapshot returns the last drive command sent to each motor, protection
+	// bytes intact. 0xF1A0 is in the manufacturer-specific identification block, so
+	// the same 0xF1xx sweep that finds the VIN and the serial finds this too --
+	// deliberate. The puzzle is the composition, not the search.
+	//
+	// THIS IS THE SANCTIONED CORPUS SOURCE. It exists precisely so the gateway does
+	// not have to forward drive traffic outbound: a contestant who could sniff
+	// 0x111/0x113 passively would get the same corpus for free, and C2 would
+	// collapse from "interact with the car, then compose" into "watch and replay".
+	didSnapshot = 0xF1A0
 )
 
 // s3Timeout is the UDS S3 session timer: an extended session falls back to default
@@ -335,6 +351,27 @@ func udsReadDataByID(req []byte) []byte {
 			return negative(sidReadDataByID, nrcConditionsNotCorrect)
 		}
 		return append([]byte{sidReadDataByID + respOffset, req[1], req[2]}, []byte(ident.ECUSerial)...)
+
+	case didSnapshot:
+		// Readable in the DEFAULT session, deliberately. C2's difficulty is the
+		// window and the composition; making the corpus itself session-gated would
+		// add a second lock to the same door and teach nothing new.
+		l, r, ok := readSnapshot()
+		if !ok {
+			// Nothing has been commanded yet. conditionsNotCorrect rather than an
+			// empty record: a zero-filled snapshot would look like a valid corpus
+			// of all-zero frames and send a contestant off composing garbage.
+			return negative(sidReadDataByID, nrcConditionsNotCorrect)
+		}
+		// Self-describing: each entry is [id hi][id lo][8 protected bytes], so a
+		// contestant does not have to guess which record belongs to which motor.
+		// 3 + 2*10 = 23 bytes, which is why this rides a CAN FD frame.
+		out := []byte{sidReadDataByID + respOffset, req[1], req[2]}
+		for _, f := range []canbus.Frame{l, r} {
+			out = append(out, byte(f.ID>>8), byte(f.ID))
+			out = append(out, f.Data...)
+		}
+		return out
 	}
 	return negative(sidReadDataByID, nrcRequestOutOfRange)
 }
@@ -378,8 +415,52 @@ func udsRoutineControl(req []byte) []byte {
 	switch rid {
 	case ridPivot:
 		return udsPivot(req, sub, rid)
+	case ridBridge:
+		return udsBridgeDecoy(sub, rid)
+	case ridSelfTest:
+		return udsSelfTest(sub, rid)
 	}
 	return negative(sidRoutineControl, nrcRequestOutOfRange)
+}
+
+// udsBridgeDecoy is the routine that is obviously named "enable diagnostic
+// bridging" and NEVER works. It answers 0x33 securityAccessDenied in every session,
+// including extended.
+//
+// It is not padding. The pair of routines is the hint structure: this one says
+// "this door is real and permanently locked", the self-test says "wrong session".
+// A contestant who finds only the decoy learns the feature exists; a contestant who
+// finds both learns that the way in is not the door marked ENTRANCE. Making this
+// one openable under any condition -- including a future "just for debugging"
+// toggle -- removes the entire C2 puzzle.
+func udsBridgeDecoy(sub byte, rid uint16) []byte {
+	logf("cmd", "decoy bridging routine invoked (always refused)")
+	return negative(sidRoutineControl, nrcSecurityAccessDenied)
+}
+
+// udsSelfTest is the actual door: an actuator self-test that legitimately needs the
+// inbound path open while it runs, and so opens it for 5 s.
+//
+// EXTENDED SESSION ONLY. In the default session it returns NRC 0x7E,
+// subFunctionNotSupportedInActiveSession -- an NRC that names its own solution.
+// Reading an NRC and acting on it is the most transferable UDS skill on the board,
+// and it costs four lines of server state.
+func udsSelfTest(sub byte, rid uint16) []byte {
+	if sub != rcStart {
+		return negative(sidRoutineControl, nrcSubFunctionNotSupported)
+	}
+	if currentSession() != sessionExtended {
+		return negative(sidRoutineControl, nrcSubFuncNotSupportedInActive)
+	}
+	until := openBridge()
+	logf("cmd", "self-test routine: inbound DIAG->DRIVE bridge open for %s (until %s)",
+		bridgeWindow, until.Format("15:04:05.000"))
+	// routineStatusRecord: window length in milliseconds, big-endian. A tester
+	// needs to know how long it has, and it is not a secret -- the panel's bridging
+	// indicator shows the same thing.
+	ms := uint16(bridgeWindow / time.Millisecond)
+	return []byte{sidRoutineControl + respOffset, sub, byte(rid >> 8), byte(rid),
+		byte(ms >> 8), byte(ms)}
 }
 
 // Pivot direction option byte.
@@ -437,6 +518,9 @@ func udsPivot(req []byte, sub byte, rid uint16) []byte {
 			return negative(sidRoutineControl, nrcConditionsNotCorrect)
 		}
 	}
+	// Record only AFTER both frames are on the wire, so the snapshot can never
+	// advertise a corpus entry that was never transmitted.
+	recordSnapshot(frames[0], frames[1])
 	logf("cmd", "pivot routine: dir=%#02x steps=%d rpm=%d -> C1 code returned",
 		req[4], pivotSteps, pivotRPM)
 
