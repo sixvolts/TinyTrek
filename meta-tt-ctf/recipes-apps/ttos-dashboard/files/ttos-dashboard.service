@@ -17,6 +17,11 @@ RestartSec=3
 # Unprivileged: a transient user with CAP_NET_RAW (AF_CAN socket) and
 # CAP_NET_BIND_SERVICE (bind port 80 on the AP address).
 DynamicUser=yes
+# The ONLY way this service can read /etc/ttos/provision.src (640 root:ttos-secrets).
+# Without it the transient user gets "permission denied" and the car serves no DIDs
+# and no unlock codes -- a dead-but-healthy-looking station. Do not drop this
+# without also changing how provisioning stages the identity.
+SupplementaryGroups=ttos-secrets
 AmbientCapabilities=CAP_NET_RAW CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes

@@ -339,19 +339,111 @@ func udsReadDataByID(req []byte) []byte {
 	return negative(sidReadDataByID, nrcRequestOutOfRange)
 }
 
-// udsRoutineControl currently supports no routines. The pivot routine (C1) lands in
-// Phase 2 and the decoy plus self-test/bridge window (C2) in Phase 3; both hang off
-// this dispatch. Unknown routine identifiers get requestOutOfRange, which is what a
-// real ECU returns and what makes a scripted RID sweep a legitimate discovery path.
+// Routine identifiers.
+//
+// A CONTIGUOUS, PLAUSIBLE BLOCK, deliberately. RoutineControl identifiers are
+// 16 bit, so hiding them would turn the challenge into a 65,536-request scripted
+// sweep rather than a puzzle. Finding 0x0201 makes 0x0202 and 0x0203 the obvious
+// next probes, which is the intended discovery path -- the puzzle is the window
+// and the composition, not the search.
+const (
+	ridPivot    = 0x0201 // C1: rotate in place, flag in the positive response
+	ridBridge   = 0x0202 // Phase 3 decoy -- always 0x33, even in extended session
+	ridSelfTest = 0x0203 // Phase 3 -- the real door; opens the inbound bridge 5 s
+)
+
+// Routine control sub-functions.
+const (
+	rcStart          = 0x01
+	rcStop           = 0x02
+	rcRequestResults = 0x03
+)
+
+// udsRoutineControl dispatches the diagnostic routines. The decoy and the
+// self-test/bridge window (C2) land in Phase 3 and hang off the same switch.
+// Unknown routine identifiers get requestOutOfRange, which is what a real ECU
+// returns and what makes a scripted RID sweep a legitimate discovery path.
 func udsRoutineControl(req []byte) []byte {
 	if len(req) < 4 {
 		return negative(sidRoutineControl, nrcIncorrectLength)
 	}
 	sub, _ := subFunc(req[1])
 	switch sub {
-	case 0x01, 0x02, 0x03: // start / stop / requestResults
+	case rcStart, rcStop, rcRequestResults:
 	default:
 		return negative(sidRoutineControl, nrcSubFunctionNotSupported)
 	}
+	rid := uint16(req[2])<<8 | uint16(req[3])
+
+	switch rid {
+	case ridPivot:
+		return udsPivot(req, sub, rid)
+	}
 	return negative(sidRoutineControl, nrcRequestOutOfRange)
+}
+
+// Pivot direction option byte.
+const (
+	pivotCW  = 0x01 // clockwise seen from above: left wheel forward, right reverse
+	pivotCCW = 0x02
+)
+
+// udsPivot runs the C1 routine: rotate in place through a fixed arc, then return
+// the car's C1 unlock code in the positive response.
+//
+// ONE COMMAND PER WHEEL, ALWAYS -- this is a hard constraint, not an efficiency
+// choice. STEPS_MAX on the motor node is 250 and `steps` is ADDED to a drain
+// buffer, so a multi-frame pivot would force the Phase 3 snapshot DID to choose
+// which frame to return, and would turn C2's composition step into recombining
+// chunk sequences instead of pairing two clean frames. 102 steps leaves 2.45x
+// headroom. Scale is 0.4411 deg/step, so anything up to 110 deg fits in one command.
+func udsPivot(req []byte, sub byte, rid uint16) []byte {
+	if sub != rcStart {
+		// stop/requestResults on a routine that completes synchronously has
+		// nothing to report.
+		return negative(sidRoutineControl, nrcSubFunctionNotSupported)
+	}
+	if len(req) < 5 {
+		return negative(sidRoutineControl, nrcIncorrectLength)
+	}
+
+	var ld, rd byte
+	switch req[4] {
+	case pivotCW:
+		ld, rd = 0x01, 0x02
+	case pivotCCW:
+		ld, rd = 0x02, 0x01
+	default:
+		return negative(sidRoutineControl, nrcRequestOutOfRange)
+	}
+
+	if !ident.complete {
+		// No identity means no code to hand back. Fail loudly rather than
+		// returning a positive response with an empty flag, which would look
+		// like a solved challenge that awards nothing.
+		logf("error", "pivot routine invoked but CTF identity is incomplete -- no C1 code to return")
+		return negative(sidRoutineControl, nrcConditionsNotCorrect)
+	}
+
+	// Opposite directions, same step count, same rpm: the wheels counter-rotate and
+	// the car turns about its own centre.
+	frames := []canbus.Frame{
+		protectedMotorFrame(idLMotor, ident.DataIDL, ld, pivotSteps, pivotRPM),
+		protectedMotorFrame(idRMotor, ident.DataIDR, rd, pivotSteps, pivotRPM),
+	}
+	for _, f := range frames {
+		if err := ctfSend(f); err != nil {
+			logf("error", "pivot routine: drive bus send failed: %v", err)
+			return negative(sidRoutineControl, nrcConditionsNotCorrect)
+		}
+	}
+	logf("cmd", "pivot routine: dir=%#02x steps=%d rpm=%d -> C1 code returned",
+		req[4], pivotSteps, pivotRPM)
+
+	// Positive response: 71 <sub> <rid hi> <rid lo> <routineStatusRecord>.
+	// The status record is the C1 code. At 4 + 8 = 12 bytes this exceeds a classic
+	// 8-byte frame, which is exactly why the DIAG bus is CAN FD -- it rides in one
+	// FD single frame and no segmentation layer is needed anywhere.
+	resp := []byte{sidRoutineControl + respOffset, sub, byte(rid >> 8), byte(rid)}
+	return append(resp, []byte(ident.CodeC1)...)
 }

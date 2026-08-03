@@ -342,7 +342,21 @@ rm -f "$STATE_DIR/factory"
 # Only now that everything validated and applied. A failed run above leaves the
 # FAT file intact so it can be corrected in the field (§5.6).
 if [ "$SRCFILE" != "$SRC" ]; then
-    cp "$SRCFILE" "$SRC" && chmod 600 "$SRC"
+    cp "$SRCFILE" "$SRC"
+    # 640 root:ttos-secrets, NOT 600 root.
+    #
+    # ttos-dashboard runs with DynamicUser=yes -- a transient unprivileged user --
+    # so a 600 root file is unreadable to it and the CTF layer logs "provision.src
+    # unreadable: permission denied" and serves NO DIDs and NO unlock codes. Every
+    # challenge on the car is then dead, and it looks identical to the unprovisioned
+    # case, which is why this survived: every hardware run so far was in factory
+    # mode, where the file legitimately does not exist. Caught on the bench
+    # 2026-08-03, the first time a provisioned identity met the Phase 1 CTF layer.
+    #
+    # The unit carries SupplementaryGroups=ttos-secrets; that group is the only
+    # thing that can read this file besides root.
+    chown root:ttos-secrets "$SRC" 2>/dev/null || chown root:root "$SRC"
+    chmod 640 "$SRC"
 fi
 if [ -n "${FATFILE:-}" ] && [ -f "$FATFILE" ]; then
     sz=$(wc -c < "$FATFILE" 2>/dev/null || echo 0)

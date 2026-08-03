@@ -117,6 +117,25 @@ def composed_replay(inj):
         time.sleep(0.08)
 
 
+def composed_replay_of_100rpm_pivot(inj):
+    """THE HAZARD, made executable.
+
+    If the C1 pivot's rpm is ever raised off 50 to escape the stepper resonance
+    band, the frames a contestant captures carry that rpm -- so replaying them
+    same-dir (the C2 solution) becomes indistinguishable from forged teleoperation
+    and trips C3 as well. Matrix C7 says that must not happen.
+
+    This case asserts that it DOES trip, because that is the truth under a 100 rpm
+    pivot. It is a regression guard on the constraint, not on the code: if someone
+    changes TTOS_PIVOT_RPM to 100 and this case starts looking benign, the tier
+    separation has been silently redefined.
+    """
+    for _ in range(25):
+        cmd(inj, ID_L, 102, FWD, 100)
+        cmd(inj, ID_R, 102, FWD, 100)
+        time.sleep(0.08)
+
+
 def sustained_forged(inj):
     """C3: sustained same-dir commanding at rpm=100."""
     for _ in range(25):
@@ -148,6 +167,8 @@ def main():
          brief_translation, True, False)
     case("composed replay, rpm=50 sustained -> C2 only (matrix C7)",
          composed_replay, True, False)
+    case("HAZARD: composed replay of a 100 rpm pivot DOES trip C3 (breaks C7)",
+         composed_replay_of_100rpm_pivot, True, True)
     case("sustained forged same-dir at rpm=100 -> C2 and C3",
          sustained_forged, True, True)
     case("stop between commands breaks the run -> C2 only",

@@ -60,7 +60,11 @@ func main() {
 	ctfDriveIf := flag.String("ctf-drive", envOr("TTOS_CTF_DRIVE_IF", "can1"), "DRIVE bus: motors, BMS, heartbeat")
 	ctfDiagIf := flag.String("ctf-diag", envOr("TTOS_CTF_DIAG_IF", "can0"), "DIAG bus: the contestant side tap, UDS server")
 	ctfIdentPath := flag.String("ctf-identity", envOr("TTOS_CTF_IDENTITY", "/etc/ttos/provision.src"), "per-car challenge identity (VIN, serial, Data IDs, codes)")
+	pivotStepsF := flag.Uint("pivot-steps", uint(envInt("TTOS_PIVOT_STEPS", 102)), "steps per wheel for the C1 pivot routine (102 = 45 deg at 0.4411 deg/step)")
+	pivotRPMF := flag.Uint("pivot-rpm", uint(envInt("TTOS_PIVOT_RPM", 50)), "rpm for the C1 pivot routine -- see the conflict documented in protect.go before changing")
 	flag.Parse()
+	pivotSteps = uint32(*pivotStepsF)
+	pivotRPM = uint32(*pivotRPMF)
 	straightRPM = uint32(*rpmStraight)
 	turnRPM = uint32(*rpmTurn)
 	repeatMs := uint32(*keepaliveF) // hold-to-drive keepalive; each one refills the node's step buffer

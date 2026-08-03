@@ -157,15 +157,27 @@ not the sign-off.
 | Group | Covered | Result |
 |---|---|---|
 | Gateway | **G1–G6 complete** | all pass, incl. after a reboot |
-| Diagnostic | — | not started |
+| Diagnostic | **D1–D6, D10 complete**; D7–D9 are Phase 3; D11 needs a soak | all pass |
 | Challenge | C7, C8, partial C5 | pass |
 | Panel | — | not started |
 
 ```sh
+./provision-bench.sh 01                 # stage car 01's identity (identity only)
+./vehicle-emulator.py --car 01 &
 ./harness-selftest.py   4/4    harness isolation
 ./test-gateway.py       5/5    G1-G5 (re-run after a reboot = G6)
-./test-detectors.py     7/7    C2/C3 rules
+./test-detectors.py     8/8    C2/C3 rules
+./test-uds.py --car 01  11/11  diagnostic server + the C1 pivot routine
 ```
+
+`provision-bench.sh` stages `/etc/ttos/provision.src` only — it deliberately does
+NOT run `ttos-provision`, which would also set the hostname, switch the AP to WPA2,
+reset the drive interface to read-only and replace the `ttos` password with the
+fleet hash, breaking the factory password every bench script feeds to `sudo -S`.
+The DUT therefore still reports itself unprovisioned and self-test sections 1 and
+10 still fail; that is expected. **It also means the provisioning path itself is
+not under test here** — flash a real image and run `ttos-provision` properly before
+the fleet is built.
 
 G3 is only meaningful because the DRIVE adapter is classic **and** the DUT's `can1`
 is classic. Both halves matter: an FD-tolerant observer absorbs the frame, and an
@@ -261,6 +273,24 @@ only the wire.**
 Consequence for the test runner: a DRIVE-side `Observer` cannot see the emulator's
 own transmissions. "Did the emulated BMS emit a flag?" is answered by its counters;
 "did the flag cross the gateway?" is answered by a DIAG `Observer`.
+
+### The bug this phase caught
+
+`ttos-dashboard.service` runs `DynamicUser=yes` — a transient unprivileged user —
+while `ttos-provision.sh` staged `/etc/ttos/provision.src` as **600 root:root**. The
+dashboard therefore could not read its own challenge identity on a provisioned car:
+no VIN, no ECU serial, no unlock codes, every challenge dead.
+
+It survived this long because it is invisible until the two halves meet. Every
+hardware run so far was in factory mode, where the file legitimately does not exist
+and the log line is the *same* "provision.src unreadable" error. A provisioned car
+would have looked healthy — dashboard up, buses up, gateway live — and simply had
+no challenges.
+
+Fixed by staging the file `640 root:ttos-secrets`, adding that group to the image,
+and giving the unit `SupplementaryGroups=ttos-secrets`. Verified on the DUT:
+`CTF identity loaded for car 01`. The file stays unreadable to the panel and to
+any contestant with a shell.
 
 ### Fault injection
 

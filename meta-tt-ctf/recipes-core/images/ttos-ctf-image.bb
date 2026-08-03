@@ -38,9 +38,13 @@ IMAGE_INSTALL:append = " \
 #  - root: locked -> no login on any path.
 #  - ttos: ops/dev user in 'wheel' (sudo via ttos-ops), locked until provisioning
 #          sets its password hash on first boot.
+#  - ttos-secrets: read access to /etc/ttos/provision.src (640 root:ttos-secrets).
+#    ttos-dashboard joins it via SupplementaryGroups; its DynamicUser cannot read a
+#    600 root file, and without this the CTF layer serves no DIDs and no codes.
 EXTRA_USERS_PARAMS = "\
     usermod -L root; \
     groupadd -f wheel; \
+    groupadd -f ttos-secrets; \
     useradd -m -G wheel -s /bin/bash ttos; \
     usermod -L ttos; \
 "
