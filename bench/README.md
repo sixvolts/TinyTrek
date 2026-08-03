@@ -146,11 +146,97 @@ result stops making sense.
 
 ---
 
+## Vehicle emulator
+
+```sh
+./vehicle-emulator.py --car 01     # two motor nodes + BMS on the DRIVE bus
+./emu-ctl.sh status                # state + counters
+./test-detectors.py                # 7 C2/C3 rule cases
+```
+
+Provisioned as **car 01** — Data IDs `L=0x60B0` / `R=0x045C`, codes `C2=2FQYWXDM`,
+`C3=3CX5E77Z`. Per brief §7 the bench must stay one car: a mismatch presents as
+universal silent CRC rejection, which is indistinguishable from a bus fault.
+(`fleet-table.csv` is gitignored, so the emulator needs `provisioning/` present.)
+
+Verified against the live DUT:
+
+- Beacon reaches the dashboard end to end — `emu-ctl.sh vbat 9500` moved the SSE
+  battery reading 100% → 53%, matching the computed 53.8%.
+- Heartbeat arm mask decoded as `0x03` (both detectors armed on a locked car).
+- Driving the DUT via `/api/control` fired `0x7D1` and `0x7D2` carrying car 01's
+  real codes, **and both reached the DIAG bus through the DUT's `cangw` policy —
+  matrix G5 passes.** That is the rule whose omission ships an unsolvable event.
+- CRC: valid frame accepted, 5 corrupted frames and 1 frame keyed to car 02's Data
+  ID all rejected with **zero** response frames (silent rejection; matrix C8).
+- LVC latches after the 1.5 s debounce and clears above 9000 mV, rail staying off
+  until an explicit `0x115`, matching `TinytrekBMS.ino`.
+
+`crc8_j1850` checks out against the standard vector (`"123456789"` → `0x4B`), and
+the CHALLENGE-PLAN §I.2 result reproduces independently: 1, 2 and 3 captures all
+leave exactly 256 candidate Data IDs.
+
+### Findings from building it
+
+**1. The brief's heartbeat requirement is wrong, and the real behaviour is worse.**
+§4 says the emulator must "refuse motion when absent, matching real node behaviour."
+`TinytrekLMotor.ino` does no such thing — `heartbeatOK()` and `powerOK()` feed
+`updateLed()` and nothing else; the step-drain block is gated on `stepsLeft > 0`
+alone. A motor node with no heartbeat and no beacon still pulses STEP. What stops
+the car is electrical: the BMS holds the 12 V rail off. The emulator models the
+firmware (buffer drains unconditionally) and tracks the rail separately, so a test
+can tell "commanded but unpowered" from "not commanded". **Do not design a
+challenge around "no heartbeat = no motion"** — it is false on the vehicle.
+
+**2. C3 must key on same-`dir`, not on `rpm` alone.** The layering doc says
+"detection keys on `rpm`" and "`rpm` already distinguishes the two cases", which
+invites exactly the rule I first wrote. It passed the positive test and would have
+failed in the only case that matters — see finding 3. The `dir` condition is what
+actually discriminates; `rpm` is a filter on top of it.
+
+**3. The resonance fix has undermined the spec's `rpm` discriminator.** The spec
+rests on: pivot = `rpm` 50 (legitimate), straight = `rpm` 100 (never legitimate
+while locked). But turn speed was raised to 100 on 2026-08-02 because 50 rpm sits
+in the steppers' mid-band resonance and grinds. So the C1 pivot routine at `rpm`=50
+**will grind audibly at every station**, and raising it to 100 makes `rpm` stop
+discriminating. Detection survives either way *because* of the same-`dir` condition
+(`test-detectors.py` case 2 proves a 100 rpm pivot stays silent), but the spec text
+is now misleading and anyone porting it who simplifies to `rpm == 100 → C3` will
+leak the C3 code on the car's own pivot. **Open decision before Phase 2: what rpm
+does the pivot run at, and does the 102-step arc still hold there?**
+
+**4. Two spec numbers are missing and are currently bench-tuned.** The C2 pair
+window ("within a short window") is set to 250 ms — the dashboard keepalive is
+150 ms, so both wheels are commanded inside one cycle. And "15 consecutive
+qualifying commands" is ambiguous between CAN frames and command cycles (each cycle
+sends two frames); this counts frames. Both need a decision before the RP2040 port.
+
+**5. Emulated nodes must NOT use the wire-only filter** — the inverse of test
+observers. A real node is a separate device, so everything reaching it is wire
+traffic by definition; an emulator on the harness host that filters `MSG_DONTROUTE`
+is deaf to exactly the frames the tests inject. On first run all four positive
+detection cases failed while all three negative cases "passed", which is the worst
+possible arrangement. Rule: **emulated nodes hear everything, test observers hear
+only the wire.**
+
+Consequence for the test runner: a DRIVE-side `Observer` cannot see the emulator's
+own transmissions. "Did the emulated BMS emit a flag?" is answered by its counters;
+"did the flag cross the gateway?" is answered by a DIAG `Observer`.
+
+### Fault injection
+
+`drop <pct>`, `mute on|off`, `latency <ms>`, `lvc on|off`, `vbat <mv>`,
+`sweep <lo> <hi> <secs>`, `rail on|off`, `reset`.
+
+`mute` stops transmission but the controller still ACKs, so it is not bus-off.
+Nothing in userspace can withhold an ACK — for a genuinely absent node (the ENOBUFS
+case that has bitten this project repeatedly) take the interface down instead:
+`sudo ip link set ttdrive down`.
+
 ## Not yet built
 
-- **Vehicle emulator** — motor nodes + BMS on DRIVE (brief §4). Nothing currently
-  answers drive commands; the DUT is talking to an empty bus.
-- **Test matrix runner** — brief §6 (G1–G6, D1–D11, C1–C8, P1–P8).
+- **Test matrix runner** — brief §6. Covered so far: G5, C7, C8, partial C5.
+  Outstanding: G1–G4, G6, all of D, C1–C4, C6, all of P.
 - **Remote power control** — no `uhubctl`, no switchable hub. A wedged DUT still
   needs a human, which caps unattended iteration.
 - **Serial console** — nothing on `/dev/serial/by-id`. When networking is what
