@@ -176,6 +176,16 @@ class SLCAN(Transport):
 
     def __init__(self, port, bitrate=500000, dbitrate=1000000, baud=1000000):
         import termios
+        # macOS exposes two nodes per serial device. /dev/tty.* is the CALL-IN
+        # node: opening it blocks until carrier-detect asserts, which on a USB CAN
+        # adapter may be never -- the tool just hangs with no error. /dev/cu.* is
+        # the call-out node and does not wait. Refuse the wrong one rather than
+        # appearing to lock up.
+        if "/tty." in port and os.path.exists(port.replace("/tty.", "/cu.")):
+            raise SystemExit(
+                f"use {port.replace('/tty.', '/cu.')} instead of {port}\n"
+                f"  On macOS /dev/tty.* blocks waiting for carrier detect; "
+                f"/dev/cu.* does not.")
         self.fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         attrs = termios.tcgetattr(self.fd)
         attrs[0] = attrs[1] = attrs[3] = 0          # iflag, oflag, lflag
