@@ -310,10 +310,20 @@ printf 'ttos:%s\n' "$P_PWHASH" | chpasswd -e || fail "chpasswd failed for ttos"
 usermod -U ttos 2>/dev/null
 
 if [ -n "$P_SSHKEY" ]; then
-    install -d -m 700 /home/ttos/.ssh
-    printf '%s\n' "$P_SSHKEY" > /home/ttos/.ssh/authorized_keys
+    # mkdir + chmod, NOT `install -d`. THERE IS NO install(1) ON THIS ROOTFS --
+    # busybox is built without it. `install -d` fails, the directory is never
+    # created, the redirect below then fails too, and the key is silently not
+    # deployed. Nothing else in provisioning depends on it, so the run continues
+    # and reports success; the only symptom is that key auth does not work,
+    # discovered whenever someone next tries to log in without a password.
+    # Found on the first real provisioning run, 2026-08-03.
+    mkdir -p /home/ttos/.ssh || fail "could not create /home/ttos/.ssh"
+    chmod 700 /home/ttos/.ssh
+    printf '%s\n' "$P_SSHKEY" > /home/ttos/.ssh/authorized_keys \
+        || fail "could not write /home/ttos/.ssh/authorized_keys"
     chmod 600 /home/ttos/.ssh/authorized_keys
     chown -R ttos:ttos /home/ttos/.ssh
+    log "installed authorized_keys for ttos"
 fi
 
 if [ -n "$P_ETH_ADDR" ]; then

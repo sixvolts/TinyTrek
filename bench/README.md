@@ -197,6 +197,37 @@ transmit CAN FD onto the drive bus and **G3 could not be closed on it**. Fixed w
 consecutive self-test runs at 2 rules, which is the proof the old destructive
 `cangw -F` is gone.
 
+## First provisioned-car run (2026-08-03)
+
+Image `…rootfs-20260803163625.wic` flashed, `ttos-provision.conf` (car 01) consumed
+on first boot. `ttos-selftest`: **40 PASS / 0 FAIL / 3 SKIP** — sections 1 and 10
+pass for the first time, and `push-config.sh` found *only* `ttos-provision`
+differing from source, so the image matched the tree everywhere else.
+
+Full suite against the provisioned car: harness 4/4, gateway 5/5, detectors 8/8,
+UDS 11/11, challenge 8/8.
+
+Two bugs that only a real provisioning run could surface:
+
+**`install(1)` in `ttos-provision.sh`.** There is no `install` on this rootfs —
+busybox is built without it. `install -d -m 700 /home/ttos/.ssh` failed, so the
+directory was never created, the `authorized_keys` redirect failed too, and the key
+was silently not deployed. Nothing else depends on it, so provisioning reported
+success; the only symptom is that key auth does not work, found whenever someone
+next logs in without a password. Now `mkdir -p` + `chmod`, both with `|| fail`.
+
+This one is doubly annoying: the same fact is already written down as correction 5
+above, from fixing `push-dashboard.sh` — the fact was known and never applied to
+the rest of the tree. A `grep -rE 'install +-'` across everything that runs *on the
+car* takes seconds and was not done. It is done now, and `timeout`/`getent` were
+swept at the same time (the only other hits are comments).
+
+**The self-test still asserted `provision.src` mode 600.** The DynamicUser fix
+changed it to `640 root:ttos-secrets` and the guard was not updated with it, so the
+first provisioned boot reported a failure for doing the right thing. The check now
+verifies mode *and owner*: `640 root:root` is just as broken as `600` and looks
+correct at a glance.
+
 ## Vehicle emulator
 
 ```sh

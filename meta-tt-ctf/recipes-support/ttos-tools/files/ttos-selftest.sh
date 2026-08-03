@@ -283,7 +283,16 @@ if [ -f /boot/ttos-provision.conf ] || [ -f /boot/firmware/ttos-provision.conf ]
 else ok "provisioning file removed from FAT partition"; fi
 if [ -f /etc/ttos/provision.src ]; then
     PERM=$(stat -c '%a' /etc/ttos/provision.src 2>/dev/null)
-    [ "$PERM" = "600" ] && ok "provisioning data moved to rootfs (provision.src, mode 600)" || no "provision.src mode is $PERM (expected 600)"
+    OWNR=$(stat -c '%U:%G' /etc/ttos/provision.src 2>/dev/null)
+    # 640 root:ttos-secrets, NOT 600. ttos-dashboard runs DynamicUser=yes, so a
+    # 600 root file is unreadable to it and the car serves no DIDs and no unlock
+    # codes while looking completely healthy. The group is the whole access path;
+    # check it too, because 640 root:root is just as broken as 600 and looks right.
+    if [ "$PERM" = "640" ] && [ "$OWNR" = "root:ttos-secrets" ]; then
+        ok "provisioning data staged to rootfs (provision.src, 640 root:ttos-secrets)"
+    else
+        no "provision.src is $PERM $OWNR (expected 640 root:ttos-secrets -- the dashboard's DynamicUser cannot read it otherwise)"
+    fi
 else sk "no /etc/ttos/provision.src (older provisioning path?)"; fi
 HKN=$(ls /etc/ssh/ssh_host_*_key 2>/dev/null | wc -l)
 [ "${HKN:-0}" -ge 1 ] && ok "SSH host keys present ($HKN) -- compare fingerprints across two cars to confirm uniqueness" || no "no SSH host keys"
