@@ -311,7 +311,11 @@ case that has bitten this project repeatedly) take the interface down instead:
 - **Serial console** — nothing on `/dev/serial/by-id`. When networking is what
   broke, there is currently no way in.
 - **`rpiboot` reflash path** — not installed; flashing still means moving the card.
-- **Static DUT address** — currently DHCP at `192.168.4.133`.
+- ~~Static DUT address~~ — **done, better than the brief asks.** `192.168.4.133` is a
+  static DHCP *reservation on the router*, keyed by MAC. Do NOT "fix" this by
+  setting `TTOS_ETH_ADDRESS` in provisioning (bench brief §7): a DUT-side static
+  address would fight the reservation, and it would have to be re-applied on every
+  reflash, whereas the reservation survives them and follows the hardware.
 
 ## What the rig still cannot tell you
 
