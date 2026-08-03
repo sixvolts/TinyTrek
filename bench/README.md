@@ -15,6 +15,7 @@ sudo ./bench-up.sh          # bring both buses up, prove the role mapping
 ./harness-selftest.py       # prove the harness can be trusted  <-- do not skip
 ./bench-status.sh           # what is the DUT actually running
 ./push-dashboard.sh         # rebuild + swap the Go binary, ~2 s
+./push-config.sh            # sync bus config, gateway policy, selftest, units
 ```
 
 ---
@@ -120,31 +121,69 @@ Set `DRIVE_FD=1` only to *capture a stray FD frame's contents*, never to run G3.
 
 ---
 
-## Known drift: the DUT is one image behind
+## Updating the DUT without a card swap
 
-`bench-status.sh` currently reports:
-
+```sh
+./push-dashboard.sh          Go binary          ~2 s
+./push-config.sh             platform files     ~10 s  (--dry-run to preview)
 ```
-!! DRIVE-BUS FD MODE DIFFERS:  source FDMode=yes:0   DUT FDMode=yes:1
+
+`push-config.sh` syncs the files a Go rebuild cannot touch — `can0/can1.network`,
+the `.link` files, the AP network file, the `cangw` policy and its unit,
+`ttos-selftest`, `ttos-provision`, `ttos-dashboard.default` and its unit — straight
+from the source tree, then reconfigures the interfaces they describe. It compares
+by sha256 and pushes only what differs.
+
+**CAN link parameters can only be set while the interface is DOWN**, and
+`systemd-networkd` will not bounce a link just because its `.network` changed. So
+`networkctl reload` alone leaves an FD interface FD forever and the push looks like
+it did nothing. The script takes both links down first — and then verifies against
+the kernel anyway, because `networkctl reconfigure` was measured here NOT to clear
+FD state it did not set (the same trap as `bench-up.sh` on the host side). It falls
+back to an explicit `ip link set can1 up type can bitrate 500000 fd off`.
+
+Interestingly, a **reboot** applies the file cleanly — the interface comes up
+classic from the driver default and networkd only ever adds `BitRate`. So the
+forced fallback matters for live iteration, not for a freshly booted car.
+
+Still needs a real flash: kernel, device-tree overlays, layer/recipe changes,
+package sets, and anything on the FAT boot partition. And this makes the *files in
+the manifest* match — not the whole image. **Flash the real `.wic` and re-run the
+suite before any milestone or go/no-go**; treat config push as the iteration path,
+not the sign-off.
+
+## Test matrix status
+
+| Group | Covered | Result |
+|---|---|---|
+| Gateway | **G1–G6 complete** | all pass, incl. after a reboot |
+| Diagnostic | — | not started |
+| Challenge | C7, C8, partial C5 | pass |
+| Panel | — | not started |
+
+```sh
+./harness-selftest.py   4/4    harness isolation
+./test-gateway.py       5/5    G1-G5 (re-run after a reboot = G6)
+./test-detectors.py     7/7    C2/C3 rules
 ```
 
-The DUT predates `112e243` (drive bus back to classic CAN 2.0). Its `can1` is still
-`FDMode=yes`, so **it can still transmit CAN FD onto the drive bus and G3 cannot be
-closed on it**. Everything else on it is current: gateway policy live with exactly
-two rules (`can1 -> can0` for `7D1`/`7D2`, nothing inbound), dashboard active, UDS
-server bound to the DIAG bus.
+G3 is only meaningful because the DRIVE adapter is classic **and** the DUT's `can1`
+is classic. Both halves matter: an FD-tolerant observer absorbs the frame, and an
+FD-capable DUT can still emit one.
 
-`.network` files ship in the image. `push-dashboard.sh` cannot fix this — it needs
-a flash of
-`ttos-ctf-image-ttos-ctf-hw.rootfs-20260802222942.wic`
-(sha256 `ca137190c205bdbccfb18637c8cfba967d3167ccb3bc6c3c15b06dd127d9c8fe`).
+Watch for two traps when adding cases, both of which bit here on first run:
+the drive bus legitimately carries the DUT's `0x100` heartbeat, so a bare
+`collect()` counts normal traffic as a leak; and a negative assertion over a dead
+bus passes for free, so pair it with a liveness check (`bus_is_live`).
 
-**This is the general hazard of the fast loop.** The binary tracks the source tree
-continuously while the platform stays frozen at the last flash, so the DUT drifts
-into a configuration that exists nowhere in git. Run `bench-status.sh` whenever a
-result stops making sense.
+## Previously-known drift, now closed
 
----
+The DUT was one image behind (pre-`112e243`): `can1` still `FDMode=yes`, so it could
+transmit CAN FD onto the drive bus and **G3 could not be closed on it**. Fixed with
+`push-config.sh` on 2026-08-03, verified by `bench-status.sh`, the DUT self-test
+(`can1 is classic CAN 2.0`), and G3 passing. The gateway also survives three
+consecutive self-test runs at 2 rules, which is the proof the old destructive
+`cangw -F` is gone.
 
 ## Vehicle emulator
 

@@ -180,7 +180,12 @@ if have cansend && have candump; then
     $SUDO modprobe vcan 2>/dev/null
     if $SUDO ip link add dev vcanTEST type vcan 2>/dev/null && $SUDO ip link set vcanTEST up 2>/dev/null; then
         VF=$(mktemp 2>/dev/null || echo /tmp/vcan.$$)
-        $SUDO candump -n 1 vcanTEST > "$VF" 2>/dev/null &
+        # -L (log format) prints "123#DEADBEEF". WITHOUT it candump prints the data
+        # bytes SPACE-SEPARATED -- "123   [4]  DE AD BE EF" -- so the grep for
+        # DEADBEEF below never matched and a healthy CAN stack was reported broken
+        # on every car. Verified on hardware 2026-08-03; the vcan link, cansend and
+        # candump were all fine the whole time. This was a test bug, not a fault.
+        $SUDO candump -L -n 1 vcanTEST > "$VF" 2>/dev/null &
         CPID=$!
         # INTEGER sleeps only. busybox sleep does not necessarily support fractional
         # seconds, and when it does not it returns immediately -- so cansend fired
@@ -207,8 +212,17 @@ hw_loop(){ # $1=iface $2=fdargs $3=frame
     if $SUDO ip link set "$ifc" type can bitrate 500000 $fdargs loopback on 2>/dev/null && $SUDO ip link set "$ifc" up 2>/dev/null; then
         # candump's own -T (idle timeout, ms) rather than timeout(1): the minimal
         # rootfs has no timeout binary. Integer sleep for busybox compatibility.
-        OUT=$( ($SUDO candump -T 3000 -n 1 "$ifc" & sleep 1; $SUDO cansend "$ifc" "$frame"; wait) 2>/dev/null )
-        echo "$OUT" | grep -qi "${frame##*#}" && ok "$ifc hardware loopback OK ($frame)" || no "$ifc hardware loopback: no frame (controller/oscillator issue?)"
+        # -L for the same reason as section 6: default candump space-separates the
+        # data bytes, so a grep for the sent payload never matches. Both sides are
+        # then reduced to bare hex so FD's "##<flags>" and any separators in the
+        # cansend argument cannot break the comparison either.
+        OUT=$( ($SUDO candump -L -T 3000 -n 1 "$ifc" & sleep 1; $SUDO cansend "$ifc" "$frame"; wait) 2>/dev/null )
+        GOT=$(printf '%s' "$OUT"            | tr -dc '0-9A-Fa-f' | tr 'a-f' 'A-F')
+        WANT=$(printf '%s' "${frame##*#}"   | tr -dc '0-9A-Fa-f' | tr 'a-f' 'A-F')
+        case "$GOT" in
+            *"$WANT"*) ok "$ifc hardware loopback OK ($frame)" ;;
+            *) no "$ifc hardware loopback: no frame (controller/oscillator issue?)" ;;
+        esac
     else no "$ifc could not enter loopback mode"; fi
 }
 hw_loop can0 "" "123#DEADBEEF"
