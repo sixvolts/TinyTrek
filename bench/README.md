@@ -156,10 +156,11 @@ not the sign-off.
 
 | Group | Covered | Result |
 |---|---|---|
-| Gateway | **G1–G6 complete** | all pass, incl. after a reboot |
-| Diagnostic | **D1–D6, D10 complete**; D7–D9 are Phase 3; D11 needs a soak | all pass |
-| Challenge | C7, C8, partial C5 | pass |
-| Panel | — | not started |
+| Gateway | **G1–G6 complete** | 5/5 |
+| Diagnostic | **D1–D10 complete**; D11 needs a soak | 11/11 + 8/8 |
+| Challenge | **C1–C4, C6–C8**; C5 needs the 30-minute soak | 8/8 + 6/6 |
+| Panel | **P1–P8 complete** | 13/13 |
+| Relay | R1–R9 (not in the brief; C3 needed them) | 9/9 |
 
 ```sh
 ./provision-bench.sh 01                 # stage car 01's identity (identity only)
@@ -322,6 +323,49 @@ Fixed by staging the file `640 root:ttos-secrets`, adding that group to the imag
 and giving the unit `SupplementaryGroups=ttos-secrets`. Verified on the DUT:
 `CTF identity loaded for car 01`. The file stays unreadable to the panel and to
 any contestant with a shell.
+
+### Findings from Phases 4 and 5
+
+**`crypto.subtle` is unavailable on the car's own panel.** SubtleCrypto exists only
+in a secure context; the panel is plain HTTP on the AP address, so
+`window.crypto.subtle` is `undefined` there. The C3 key transform ships in the
+panel JS by design — contestants view source and run it — so building it on
+SubtleCrypto would have thrown on the one platform it exists for, killing the
+intended solution while nothing looked broken. It ships a bundled SHA-256, verified
+in headless Chromium against a reference implementation over a genuinely non-secure
+origin (`isSecureContext=false`, `crypto.subtle=undefined`), including the
+multi-block padding path.
+
+**ENOBUFS on the relay under sustained load.** The drive bus is 500 kbit and the
+interface transmit queue is ten deep, so a client writing as fast as TCP allows
+overran it: 80 frames issued in ~0 ms, 29 rejected. A contestant would have seen
+the car stutter and concluded their forgery was wrong, then gone back to
+re-deriving a CRC that was already correct — the exact unfair stalling the design
+sets out to avoid. Bounded retry now paces the sender to bus speed.
+
+Found only by driving the car through the relay. No unit test of `relaySend` would
+have produced it.
+
+**busybox `nc` silently loses commands.** It exits on stdin EOF, and closing a
+socket with unread received data sends RST, discarding whatever the server had not
+processed — 19 of 40 SEND commands. Not a relay bug, but contestants will reach for
+`nc` first, so the banner tells them to read every response, and it ends with a
+`READY` sentinel so clients need not count banner lines (adding a line silently
+broke every client, which is how that was found).
+
+**`Storage=persistent` was applied and did nothing.** `/var/log` is a symlink into
+the `/var/volatile` tmpfs, so the "persistent" journal was still wiped on reboot.
+systemd accepted the drop-in and `/var/log/journal` never appeared. It matters here
+because there is no RTC and journald is the only record of a solve, and the
+power-cycle that hands a station to the next team is exactly when it would vanish.
+Fixed with `VOLATILE_LOG_DIR = "no"`; needs an image build, not a config push.
+
+**A self-test check that Phase 5 made wrong in both directions.** It asserted
+`TTOS_DASH_FRAMES` was empty, which was equivalent to checking behaviour until
+per-session tier gating became the real control. After Phase 5 it fails a correctly
+configured car, and an empty variable with broken tier logic would pass. It now
+queries what an unauthenticated client actually receives from `/api/info`. General
+lesson: assert the behaviour, not the setting that used to imply it.
 
 ### Fault injection
 
