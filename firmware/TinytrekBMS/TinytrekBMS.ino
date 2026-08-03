@@ -6,24 +6,27 @@ int canId = 0x115;         // RX: power command  [0x01]=on / [0x02]=off
 int statusId = 0x116;      // TX: battery telemetry (Vbat millivolts, uint16 big-endian)
 
 // ---- CTF challenge layer ---------------------------------------------------
-// The BMS doubles as the DRIVE-bus MONITOR. It watches the motor command traffic
-// it is already receiving and emits a flag frame when it sees a signature no
-// legitimate interface produces. Nothing here transmits unless a detector is both
-// ARMED and triggered, and a baseline build compiles all of it out.
+// The BMS doubles as the DRIVE-bus MONITOR: it watches the motor command traffic it
+// already receives and emits a flag frame on a signature no legitimate interface
+// produces.
 //
-// These rules were prototyped and tuned on the bench against real timing before
-// being brought here (bench/vehicle-emulator.py, bench/test-detectors.py) --
-// eight RP2040s are the slowest thing in this project to iterate on.
-#if defined(__has_include)
-#  if __has_include("ttos-fleet.h")
-#    include "ttos-fleet.h"
-#  endif
-#endif
-#ifndef TTOS_CHALLENGE
-#  define TTOS_CHALLENGE 0
-#endif
+// NOTHING IS COMPILED IN. The Pi sends the unlock codes and detector thresholds
+// during PROVISIONING -- an operator action, before the event -- and they are
+// written to flash here. At runtime they are read from flash and nothing is
+// transmitted, so the codes are never on the bus while a contestant is on it.
+//
+// A configured node IGNORES further config frames, so nobody who reaches the drive
+// bus can overwrite them. Until provisioned this node detects nothing: an
+// unprovisioned car has no challenge to protect, and staying quiet is the safe
+// direction.
+//
+// The rules were prototyped and tuned against real timing on the bench before being
+// brought here (bench/vehicle-emulator.py, bench/test-detectors.py) -- eight RP2040s
+// are the slowest thing in this project to iterate on.
+#include <EEPROM.h>
 
-#if TTOS_CHALLENGE
+const long NODE_CFG_ID  = 0x101;   // RX: provisioning from the Pi
+const uint8_t CFG_MAGIC = 0xC7;    // marks a written record; anything else = empty
 const long HEARTBEAT_ID = 0x100;   // RX: [seq][armFlags]
 const long L_MOTOR_ID   = 0x111;   // RX: monitored, never transmitted
 const long R_MOTOR_ID   = 0x113;
@@ -32,30 +35,54 @@ const long C3_FLAG_ID   = 0x7D2;   // TX: C3 unlock code, 8 ASCII
 
 // ARM MASK, mirrored from heartbeat byte 1. Bit SET = detector ARMED.
 //
-// POSITIVE ARMING, not "redeemed" bits, and the direction is the whole point.
-// With redeemed-semantics a zero byte would mean ARMED, so any failure -- a Pi
-// bug, a short frame, old firmware, a dropped heartbeat -- would leave detection
-// live and the car would leak its unlock codes during ordinary driving. With
-// arm-semantics those same failures leave detection DISARMED: the challenge does
-// not fire, someone reports "this station is broken", and it gets fixed.
-// A dead station is recoverable. A silently leaked flag is not.
+// POSITIVE ARMING, and the direction is the whole point. With redeemed-semantics a
+// zero byte would mean ARMED, so any failure -- a Pi bug, a short frame, old
+// firmware, a dropped heartbeat -- would leave detection live and the car would leak
+// its unlock codes during ordinary driving. With arm-semantics those same failures
+// leave detection DISARMED: the challenge does not fire, someone reports "this
+// station is broken", and it gets fixed. A dead station is recoverable. A silently
+// leaked flag is not.
 const uint8_t ARM_C2 = 0x01;
 const uint8_t ARM_C3 = 0x02;
 const unsigned long HEARTBEAT_TIMEOUT_MS = 1000;  // stale heartbeat -> disarmed
 
-// Detection thresholds. C3_COUNT/C3_WINDOW_MS are specified; C2_PAIR_WINDOW_MS is
-// not, and was chosen on the bench: the Pi commands both wheels inside one 150 ms
-// keepalive cycle, so 250 ms covers a real pair with margin while staying too tight
-// to accidentally pair two unrelated single-wheel commands.
-const unsigned long C2_PAIR_WINDOW_MS = 250;
-const unsigned long HOLD_MS           = 1000;   // condition "still true" after last hit
-const uint8_t       C3_COUNT          = 15;     // consecutive qualifying commands
-const unsigned long C3_WINDOW_MS      = 3000;
-const uint8_t       PIVOT_RPM         = 75;     // the ONLY rpm legitimate locked traffic uses
-                                                // MUST MATCH TTOS_PIVOT_RPM on the Pi. If they diverge,
-                                                // the car fires 0x7D2 on its OWN pivot routine and leaks
-                                                // the C3 code before anyone attempts the challenge.
-const unsigned long FLAG_EMIT_MS      = 500;    // 2 Hz while the condition holds
+const unsigned long HOLD_MS      = 1000;   // condition "still true" after last hit
+const unsigned long FLAG_EMIT_MS = 500;    // 2 Hz while the condition holds
+const uint8_t       C3_MAX       = 32;     // ring capacity; threshold is provisioned
+
+// Provisioned by the Pi. Defaults are inert: with no codes there is nothing to
+// emit, and detection stays off until cfgReady().
+char          codeC2[9] = {0};
+char          codeC3[9] = {0};
+uint8_t       pivotRpm      = 0;     // the ONLY rpm legitimate locked traffic uses
+unsigned long c2PairWindowMs = 250;
+uint8_t       c3Count        = 15;
+unsigned long c3WindowMs     = 3000;
+bool          haveC2 = false, haveC3 = false, haveTuning = false;
+
+// Flash layout: [magic][C2 x8][C3 x8][pivotRpm][c2win/10][c3count][c3win/100]
+static void cfgLoad() {
+  EEPROM.begin(32);
+  if (EEPROM.read(0) != CFG_MAGIC) return;
+  for (uint8_t i = 0; i < 8; i++) { codeC2[i] = EEPROM.read(1 + i); codeC3[i] = EEPROM.read(9 + i); }
+  pivotRpm       = EEPROM.read(17);
+  c2PairWindowMs = (unsigned long)EEPROM.read(18) * 10;
+  c3Count        = EEPROM.read(19); if (c3Count > C3_MAX) c3Count = C3_MAX;
+  c3WindowMs     = (unsigned long)EEPROM.read(20) * 100;
+  haveC2 = haveC3 = haveTuning = true;
+}
+
+static void cfgStore() {
+  EEPROM.write(0, CFG_MAGIC);
+  for (uint8_t i = 0; i < 8; i++) { EEPROM.write(1 + i, codeC2[i]); EEPROM.write(9 + i, codeC3[i]); }
+  EEPROM.write(17, pivotRpm);
+  EEPROM.write(18, (uint8_t)(c2PairWindowMs / 10));
+  EEPROM.write(19, c3Count);
+  EEPROM.write(20, (uint8_t)(c3WindowMs / 100));
+  EEPROM.commit();
+}
+
+static bool cfgReady() { return haveC2 && haveC3 && haveTuning && pivotRpm > 0; }
 
 uint8_t       armMask = 0;
 unsigned long lastHeartbeatMs = 0;
@@ -67,10 +94,9 @@ unsigned long lastCmdMs[2] = {0, 0};
 
 unsigned long c2HoldUntil = 0;
 unsigned long c3HoldUntil = 0;
-unsigned long c3Hits[C3_COUNT];          // ring of qualifying-command timestamps
+unsigned long c3Hits[C3_MAX];
 uint8_t       c3Head = 0, c3Len = 0;
 unsigned long lastFlagMs = 0;
-#endif  // TTOS_CHALLENGE
 
 // --- Battery sense (A1) ------------------------------------------------------
 // 120k high-side / 40.2k low-side divider (0.5%), fed to A1.
@@ -130,6 +156,7 @@ bool lvcLockout = false;
 bool power12v   = false;                 // tracks the 12V relay for the LED
 
 void setup() {
+  cfgLoad();   // provisioned values from flash; nothing is transmitted at runtime
   Serial.begin(115200);
 
   Serial.println("Initializing GPIO");
@@ -197,10 +224,10 @@ long readVbatMv() {
   return vbatMv;
 }
 
-#if TTOS_CHALLENGE
 // noteCommand folds one observed motor command into the detector state.
 // idx 0 = left, 1 = right.
 static void noteCommand(uint8_t idx, uint8_t dir, uint8_t rpm) {
+  if (!cfgReady()) return;   // nothing provisioned -> nothing to detect
   unsigned long now = millis();
   lastDir[idx] = dir; lastRpm[idx] = rpm; lastCmdMs[idx] = now;
   if (dir == 0x00) { c3Len = 0; c3Head = 0; return; }   // an explicit stop breaks the run
@@ -208,7 +235,7 @@ static void noteCommand(uint8_t idx, uint8_t dir, uint8_t rpm) {
   uint8_t other = idx ^ 1;
   bool sameDirPair = lastCmdMs[other] != 0
                   && lastDir[other] == dir
-                  && (now - lastCmdMs[other]) <= C2_PAIR_WINDOW_MS;
+                  && (now - lastCmdMs[other]) <= c2PairWindowMs;
 
   // C2: both wheels commanded the SAME way inside a short window. That is a
   // translation, and no legitimate interface commands one while the panel is
@@ -222,10 +249,10 @@ static void noteCommand(uint8_t idx, uint8_t dir, uint8_t rpm) {
   // the pivot rpm is changed -- leaking the C3 code before anyone attempts the
   // challenge. It is rpm AND direction, always.
   if (armMask & ARM_C3) {
-    if (sameDirPair && rpm != PIVOT_RPM) {
-      if (c3Len < C3_COUNT) { c3Hits[(c3Head + c3Len) % C3_COUNT] = now; c3Len++; }
-      else { c3Hits[c3Head] = now; c3Head = (c3Head + 1) % C3_COUNT; }
-      if (c3Len == C3_COUNT && (now - c3Hits[c3Head]) <= C3_WINDOW_MS) {
+    if (sameDirPair && rpm != pivotRpm) {
+      if (c3Len < c3Count) { c3Hits[(c3Head + c3Len) % C3_MAX] = now; c3Len++; }
+      else { c3Hits[c3Head] = now; c3Head = (c3Head + 1) % C3_MAX; }
+      if (c3Len >= c3Count && (now - c3Hits[c3Head]) <= c3WindowMs) {
         c3HoldUntil = now + HOLD_MS;
       }
     } else {
@@ -239,7 +266,6 @@ static void emitFlag(long id, const char* code) {
   for (uint8_t i = 0; i < 8; i++) CAN.write(code[i] ? code[i] : 0x00);
   CAN.endPacket();
 }
-#endif
 
 void loop() {
   int packetSize = CAN.parsePacket();
@@ -254,14 +280,38 @@ void loop() {
       powerOff();
     }
   }
-#if TTOS_CHALLENGE
   else if (packetSize > 0) {
     long rxId = CAN.packetId();
     int  rxDlc = CAN.packetDlc();
     uint8_t rb[8] = {0};
     CAN.readBytes((char*)rb, rxDlc);
 
-    if (rxId == HEARTBEAT_ID) {
+    if (rxId == NODE_CFG_ID && rxDlc >= 2 && !cfgReady()) {
+      // [type][idx][payload]. Codes arrive as two 6-byte chunks.
+      switch (rb[0]) {
+        case 0x10:
+          if (rb[1] == 0) { memcpy(codeC2,     &rb[2], 6); }
+          else            { memcpy(codeC2 + 6, &rb[2], 2); haveC2 = true; }
+          break;
+        case 0x11:
+          if (rb[1] == 0) { memcpy(codeC3,     &rb[2], 6); }
+          else            { memcpy(codeC3 + 6, &rb[2], 2); haveC3 = true; }
+          break;
+        case 0x20:
+          if (rxDlc >= 6) {
+            pivotRpm       = rb[2];
+            c2PairWindowMs = (unsigned long)rb[3] * 10;
+            c3Count        = rb[4] > C3_MAX ? C3_MAX : rb[4];
+            c3WindowMs     = (unsigned long)rb[5] * 100;
+            haveTuning     = true;
+          }
+          break;
+      }
+      if (cfgReady()) {
+        cfgStore();
+        Serial.println("provisioned: codes and thresholds stored, detection ARMED");
+      }
+    } else if (rxId == HEARTBEAT_ID) {
       lastHeartbeatMs = millis();
       haveHeartbeat = true;
       // DLC < 2 means no flags field, so no arming information -> DISARMED.
@@ -285,10 +335,11 @@ void loop() {
   // someone who solved it without a sniffer running can simply do it again.
   if (millis() - lastFlagMs >= FLAG_EMIT_MS) {
     lastFlagMs = millis();
-    if ((armMask & ARM_C2) && millis() < c2HoldUntil) emitFlag(C2_FLAG_ID, TTOS_CODE_C2);
-    if ((armMask & ARM_C3) && millis() < c3HoldUntil) emitFlag(C3_FLAG_ID, TTOS_CODE_C3);
+    if (cfgReady()) {
+      if ((armMask & ARM_C2) && millis() < c2HoldUntil) emitFlag(C2_FLAG_ID, codeC2);
+      if ((armMask & ARM_C3) && millis() < c3HoldUntil) emitFlag(C3_FLAG_ID, codeC3);
+    }
   }
-#endif
 
   // Low-voltage cutoff, debounced so motor-inrush sag doesn't cut the rail.
   // Latch only after the pack stays below cutoff for LVC_TRIP_MS continuously;

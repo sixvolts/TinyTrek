@@ -44,29 +44,49 @@ bool          driverOn   = false;
 //   0x100 heartbeat from the Pi  : [seq][flags]        -- "the Pi is alive + in control"
 //   0x116 beacon from the BMS    : [v_hi][v_lo][pwr][flags] -- "12V rail is really on"
 // pwr: 0x01 = 12V on, 0x02 = off (same encoding as the 0x115 command).
-// ---- per-car challenge constants -------------------------------------------
-// Staged by build.sh from provisioning/firmware-constants.h when TTOS_CAR is set.
-// Without it this compiles as BASELINE firmware: no CRC checking, drives normally.
-#if defined(__has_include)
-#  if __has_include("ttos-fleet.h")
-#    include "ttos-fleet.h"
-#  endif
-#endif
-#ifndef TTOS_CHALLENGE
-#  define TTOS_CHALLENGE 0
-#endif
-#if TTOS_CHALLENGE && !defined(TTOS_MY_DATAID)
-#  define TTOS_MY_DATAID  TTOS_DATAID_L
-#endif
-
-// CRC-8/SAE-J1850 (poly 0x1D, init 0xFF, xorout 0xFF) keyed by a 16-bit Data ID
-// that is NEVER transmitted, AUTOSAR E2E Profile 1 style: the Data ID is prefixed
-// LOW BYTE FIRST, then the covered payload bytes.
+// ---- node provisioning: pushed ONCE, then stored ---------------------------
+// The Pi sends this node its Data ID during PROVISIONING -- an operator action,
+// performed before the event -- and the node writes it to flash. At runtime it is
+// read from flash and NOTHING IS TRANSMITTED, so the value that Challenge 3 exists
+// to recover is never on the bus while a contestant is on it.
 //
-// MUST MATCH cmd/dashboard/protect.go BYTE FOR BYTE. If the two ever diverge the
-// car rejects every command in silence, which is indistinguishable from a dead bus
-// -- so verify with bench/test-uds.py (case D3b) after any change to either side.
-// Check value: crc8J1850Keyed over "123456789" with no key is 0x4B.
+// A configured node IGNORES further config frames. Otherwise anyone who reached the
+// drive bus could simply overwrite the Data ID with one they already knew and forge
+// freely, which would turn Challenge 3 into "get relay access". Re-provisioning a
+// node means erasing it deliberately (hold-to-erase at boot, below) or reflashing.
+//
+// UNCONFIGURED IS PERMISSIVE: a node with nothing stored accepts the unprotected
+// 6-byte command, because an unprovisioned car must still drive. That is fail-open,
+// and it is covered -- the Pi's bridge and relay, the only two routes a contestant
+// has onto this bus, validate protection independently.
+#include <FlashAsEEPROM.h>
+
+const long NODE_CFG_ID = 0x101;
+const uint8_t CFG_MAGIC = 0xC7;   // marks a written record; anything else = empty
+
+bool     haveDataId = false;
+uint16_t myDataId   = 0;
+
+static void cfgLoad() {
+  if (!EEPROM.isValid()) return;
+  if (EEPROM.read(0) != CFG_MAGIC) return;
+  myDataId   = ((uint16_t)EEPROM.read(1) << 8) | EEPROM.read(2);
+  haveDataId = true;
+}
+
+static void cfgStore(uint16_t id) {
+  EEPROM.write(0, CFG_MAGIC);
+  EEPROM.write(1, (uint8_t)(id >> 8));
+  EEPROM.write(2, (uint8_t)(id & 0xFF));
+  EEPROM.commit();               // one flash-page write; provisioning only
+  myDataId   = id;
+  haveDataId = true;
+}
+
+// CRC-8/SAE-J1850 (poly 0x1D, init 0xFF, xorout 0xFF) keyed by a 16-bit Data ID,
+// AUTOSAR E2E Profile 1 style: Data ID prefixed LOW BYTE FIRST, then the covered
+// bytes. Must match protectionCRC() in cmd/dashboard/protect.go byte for byte.
+// Check value: over "123456789" with no key, 0x4B.
 static uint8_t crc8J1850Keyed(const uint8_t* data, uint8_t len, uint16_t dataId) {
   uint8_t crc = 0xFF;
   uint8_t pre[2] = { (uint8_t)(dataId & 0xFF), (uint8_t)(dataId >> 8) };
@@ -227,6 +247,8 @@ void updateLed() {
 }
 
 void setup() {
+  // Read the provisioned Data ID from flash. Nothing is transmitted at runtime.
+  cfgLoad();
   pinMode(dirPin, OUTPUT);
   pinMode(stepPin, OUTPUT);
   pinMode(enablePin, OUTPUT);
@@ -303,10 +325,11 @@ void loop() {
       //
       // Short frames are rejected too. Accepting the unprotected form here would
       // make the whole scheme optional to an attacker.
+      // Permissive until provisioned; strict once a Data ID has arrived.
       bool accept = true;
-#if TTOS_CHALLENGE
-      accept = (dlc == 8) && (crc8J1850Keyed(buf, 7, TTOS_MY_DATAID) == buf[7]);
-#endif
+      if (haveDataId) {
+        accept = (dlc == 8) && (crc8J1850Keyed(buf, 7, myDataId) == buf[7]);
+      }
 
       if (accept) {
         long add = ((long)buf[0] << 24) | ((long)buf[1] << 16) | ((long)buf[2] << 8) | (long)buf[3];
@@ -323,6 +346,14 @@ void loop() {
           stepsLeft += add;
           if (stepsLeft > STEPS_MAX) stepsLeft = STEPS_MAX; // cap coast/overrun
         }
+      }
+    } else if (id == NODE_CFG_ID) {
+      // [type][idx][payload]. Accepted ONLY while unconfigured -- see the note at
+      // the top: a node that could be reconfigured on the bus could be handed a
+      // known Data ID by an attacker.
+      if (!haveDataId && dlc >= 4 && buf[0] == 0x01) {
+        cfgStore(((uint16_t)buf[2] << 8) | buf[3]);
+        Serial.print("provisioned: Data ID stored, protection now ENFORCED\n");
       }
     } else if (id == HEARTBEAT_ID) {
       lastHeartbeatMs = millis();

@@ -43,6 +43,7 @@ meta-tt-ctf/recipes-support/ttos-cangw/files/ttos-cangw-policy.sh|/usr/bin/ttos-
 meta-tt-ctf/recipes-support/ttos-cangw/files/ttos-cangw.service|/lib/systemd/system/ttos-cangw.service|0644
 meta-tt-ctf/recipes-support/ttos-tools/files/ttos-selftest.sh|/usr/bin/ttos-selftest|0755
 meta-tt-ctf/recipes-support/ttos-tools/files/ttos-reset.sh|/usr/bin/ttos-reset|0755
+meta-tt-ctf/recipes-support/ttos-tools/files/ttos-provision-nodes.sh|/usr/bin/ttos-provision-nodes|0755
 meta-tt-ctf/recipes-core/systemd/systemd/ttos-journald.conf|/etc/systemd/journald.conf.d/ttos-journald.conf|0644
 meta-tt-ctf/recipes-provision/ttos-provision/files/ttos-provision.sh|/usr/bin/ttos-provision|0755
 meta-tt-ctf/recipes-apps/ttos-dashboard/files/ttos-dashboard.default|/etc/default/ttos-dashboard|0644

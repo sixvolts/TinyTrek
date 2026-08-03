@@ -276,3 +276,19 @@ func handleJudge(w http.ResponseWriter, r *http.Request) {
 		"seq":      relaySeqValue(),
 	})
 }
+
+// handleProvisionNodes pushes the per-node config burst. Operator-initiated, from
+// the car itself -- see ttos-provision-nodes. Deliberately NOT gated behind a
+// challenge tier: it is a setup action, and the secrets it carries are already in
+// this process. It is reachable only on the AP address, like everything else here.
+func handleProvisionNodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := provisionNodes(); err != nil {
+		writeJSON(w, map[string]any{"ok": false, "msg": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "msg": "node config pushed"})
+}

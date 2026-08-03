@@ -311,6 +311,13 @@ func relayStream(conn *canbus.Conn, c net.Conn, w *bufio.Writer) {
 		if err != nil {
 			return
 		}
+		// NEVER stream node provisioning. SUB is raw drive-bus read access, and
+		// these frames carry the Data IDs -- an authenticated contestant could
+		// otherwise lift the answer to Challenge 3 off the wire instead of
+		// recovering it, which would make the reverse-engineering content optional.
+		if f.ID == idNodeConfig {
+			continue
+		}
 		_ = c.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		if _, err := fmt.Fprintf(w, "FRAME %03X#%X\r\n", f.ID, f.Data); err != nil {
 			return
@@ -365,6 +372,13 @@ func parseRelayFrame(s string) (canbus.Frame, error) {
 	}
 	if id > 0x7FF {
 		return canbus.Frame{}, fmt.Errorf("id %03X is not an 11-bit identifier", id)
+	}
+	// Housekeeping IDs are refused outright. 0x101 carries node provisioning: a
+	// contestant who could send it would hand the motors a Data ID they already
+	// knew and forge freely, reducing Challenge 3 to "get relay access". 0x100 is
+	// the heartbeat, whose flags byte arms and disarms the detectors.
+	if uint32(id) == idNodeConfig || uint32(id) == idHeartbeat {
+		return canbus.Frame{}, fmt.Errorf("id %03X is reserved", id)
 	}
 	data, err := hex.DecodeString(dataStr)
 	if err != nil {

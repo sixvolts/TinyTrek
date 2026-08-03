@@ -111,49 +111,49 @@ either way, since the CAN id differs.
 
 ---
 
-## 4. Where message protection is enforced — and why it moved
+## 4. Node provisioning, and where protection is enforced
 
-**The Pi enforces, at its two inbound gates. The motor nodes do not.**
-
-That is a deviation from the layering doc, made 2026-08-03, and it is the one most
-worth reviewing.
-
-The doc puts the CRC check in motor firmware. That cannot coexist with two hard
-requirements:
-
-1. an **unprovisioned** car must drive, and
-2. the car must drive **after Challenge 3**.
-
-An unprovisioned Pi has no Data IDs — they arrive in `provision.src` — so it cannot
-construct a protected frame at all. Motor nodes that accept nothing else leave the
-car undrivable until it is provisioned, and leave the post-C3 reward dead. Putting
-the Data IDs in the image instead would mean fleet secrets in a build artifact.
-
-Moving the check to the Pi works because **contestants have exactly two routes to
-the drive bus and the Pi owns both**:
+**Nothing per-car is compiled into firmware.** There is one motor binary and one BMS
+binary for the whole fleet. The Pi is the only thing that carries per-car data.
 
 ```
-  C2 bridge window  DIAG → DRIVE, 0x111/0x113 only, 5 s, opened by the self-test
-  C3 relay          authenticated TCP, WiFi only, raw CAN onto DRIVE
+SETUP (operator, before the event)
+    sudo ttos-provision-nodes
+    → Pi bursts Data IDs, unlock codes and detector thresholds on 0x101 for ~6 s
+    → nodes latch them and WRITE THEM TO FLASH
+
+RUNTIME (competition)
+    → nodes read from flash at boot; NOTHING is transmitted
+    → a provisioned node IGNORES further config frames
+    → the relay refuses to transmit 0x101 or 0x100 at all
 ```
 
-There is no third path — guaranteeing that is what the gateway policy exists for.
-So "recover the Data ID or the car will not move" still holds, which is all C3
-rests on.
+**Why provisioning is a one-shot operator action, not periodic.** An earlier version
+broadcast the set at 1 Hz forever and filtered it out of the relay's read path. That
+put the value Challenge 3 exists to recover permanently on the bus a contestant is
+attacking, with a single Pi-side filter between them and it. Provisioning now happens
+before the event, with nobody listening.
 
-**Given up:** protection against someone with *physical* drive-bus access. Already
-outside the threat model — that person can drive the car directly and skip every
-challenge.
+**Why a provisioned node refuses reconfiguration.** Otherwise anyone reaching the
+drive bus could hand the motors a Data ID they already knew and forge freely,
+collapsing Challenge 3 into "get relay access". Re-provisioning means erasing or
+reflashing the node — physical access, deliberately.
 
-**Gained:** motor nodes stay baseline. 8 flashes instead of 24, and the
-silent-rejection debugging hazard is gone from the hardware hardest to instrument.
+**Unconfigured is permissive.** A node with nothing stored accepts the unprotected
+6-byte command, because an unprovisioned car must still drive — a hard requirement,
+and a car that will not move until provisioned is useless during setup.
 
-Both gates **drop silently and answer uniformly**. The relay says `OK queued`
-whether or not it forwarded, because answering "bad CRC" would be a free oracle: a
-contestant could sweep the protection byte and read the reply instead of recovering
-the Data ID. The only feedback is whether the car moved.
+That is fail-open, so **the Pi's inbound gates validate protection independently**.
+Contestants have exactly two routes to the drive bus and the Pi owns both: the 5 s
+C2 bridge window and the C3 relay. Both drop unprotected or bad-CRC frames silently.
+The two layers cover each other — a node that missed its config still cannot be
+driven by a contestant, and a mistake in a gate still leaves the node enforcing.
+Neither is load-bearing alone.
 
----
+Both gates **answer uniformly**. The relay says `OK queued` whether or not it
+forwarded, because answering "bad CRC" would be a free oracle: a contestant could
+sweep the protection byte and read the reply instead of recovering the Data ID. The
+only feedback is whether the car moved.
 
 ## 5. The gateway
 
@@ -304,7 +304,7 @@ not an e-stop.
 | # | Doc says | Built as | Why |
 |---|---|---|---|
 | 1 | CRC covers bytes 0–5 | **0–6, includes the nonce** | 0–5 gives exactly 2 capturable inputs *ever*, leaving 4 indistinguishable CRC models that no further capture resolves. Covering the nonce makes 3 captures pin it uniquely |
-| 2 | Motor firmware validates the CRC | **the Pi's inbound gates do** | node-side is incompatible with "unprovisioned must drive" and "must drive after C3" — section 4 |
+| 2 | Data IDs and codes compiled into firmware | **provisioned over CAN, stored in flash** | one binary per node type for the whole fleet; a changed code is a reprovision, not a reflash. Nodes enforce, *and* the Pi's gates enforce — section 4 |
 | 3 | Bridge window via inbound `cangw` rules | **Go forwarder** | kernel rules need `CAP_NET_ADMIN` on the one network-reachable process |
 | 4 | Per-car Data IDs and codes | **fleet-wide** | a dying car must not cost a team their work |
 | 5 | pivot `rpm`=50 | **75** | 50 = 167 pps, inside the steppers' resonance band: it grinds and drops steps. 100 is clean but is the speed a contestant would drive at, which would let them evade C3 by accident |
@@ -319,11 +319,11 @@ not an e-stop.
 |---|---|---|---|
 | Pi image (`.wic`) | 8 | **identical** | `./build.sh` |
 | `ttos-provision.conf` | 8 | **per car** | `provisioning/ttos-provision-carNN.conf` |
-| BMS firmware | 8 boards | **identical binary** | `TTOS_CHALLENGE=1 ./build.sh <fqbn> TinytrekBMS` |
-| Motor firmware | 16 boards | **identical, baseline** | already flashed — no reflash needed |
+| BMS firmware | 8 boards | **identical binary** | `./build.sh <fqbn> TinytrekBMS` |
+| Motor firmware | 16 boards | **identical binary** | `./build.sh <fqbn> TinytrekLMotor` / `RMotor` |
 
-**The BMS is the only node needing a new flash**, and all 8 get the same binary.
-Per-car difference is one file on the Pi's boot partition.
+No build-time car id anywhere. Per-car difference is one file on the Pi's boot
+partition, plus running `sudo ttos-provision-nodes` once per car during setup.
 
 ---
 

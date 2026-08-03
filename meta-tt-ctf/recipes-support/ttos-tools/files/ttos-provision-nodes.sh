@@ -1,0 +1,51 @@
+#!/bin/sh
+# ttos-provision-nodes -- push this car's Data IDs, unlock codes and detector
+# thresholds to the three CAN nodes, which store them in flash.
+#
+#     sudo ttos-provision-nodes
+#
+# RUN THIS ONCE PER CAR, DURING SETUP, BEFORE THE EVENT. The values it sends are
+# the answer to Challenge 3; they must not be on the bus while a contestant is on
+# it. Nothing is transmitted at runtime -- the nodes read from flash at boot.
+#
+# A node that has already been provisioned IGNORES what this sends, so running it
+# again is harmless but also does nothing. To re-provision a node you have to erase
+# it deliberately or reflash it -- that is the point: if a node could be
+# reconfigured over the bus, anyone who reached the bus could hand it a Data ID they
+# already knew and forge freely.
+#
+# Run it after a node is replaced, and after any change to the unlock codes or the
+# pivot rpm in provisioning.
+
+set -e
+PATH="/sbin:/usr/sbin:$PATH"; export PATH
+
+if [ "$(id -u)" != 0 ]; then
+    if command -v sudo >/dev/null 2>&1; then exec sudo -- "$0" "$@"; fi
+    echo "must run as root" >&2; exit 1
+fi
+
+ADDR=$(sed -n 's/^TTOS_DASH_ADDR=//p' /etc/default/ttos-dashboard 2>/dev/null | head -n 1)
+[ -n "$ADDR" ] || ADDR="192.168.244.1:80"
+CAR=$(grep -E '^TTOS_CAR_ID=' /etc/ttos/provision.src 2>/dev/null | cut -d= -f2)
+
+printf '\n=== provisioning CAN nodes -- car %s ===\n\n' "${CAR:-UNPROVISIONED}"
+
+if [ ! -f /etc/ttos/provision.src ]; then
+    printf '  This car has no provisioned identity, so there is nothing to push.\n'
+    printf '  Provision the Pi first (drop ttos-provision.conf on the boot partition).\n'
+    printf '  The nodes stay permissive meanwhile, so the car still drives.\n\n'
+    exit 1
+fi
+
+printf '  pushing to the drive bus (about 6 seconds) ... '
+RESP=$(curl -s --max-time 30 -X POST "http://${ADDR}/api/provision-nodes" 2>/dev/null)
+case "$RESP" in
+    *'"ok":true'*) printf 'done\n' ;;
+    '')            printf 'FAILED\n\n  No response from the console on %s.\n  Is ttos-dashboard running?\n\n' "$ADDR"; exit 1 ;;
+    *)             printf 'FAILED\n\n  %s\n\n' "$RESP"; exit 1 ;;
+esac
+
+printf '\n  The nodes have stored their values and will ignore further config.\n'
+printf '  Verify: the motors should now reject unprotected commands, and the BMS\n'
+printf '  should emit its flag frames when a detection condition is met.\n\n'

@@ -120,6 +120,9 @@ func main() {
 		// this is Go and not a cangw rule.
 		go bridgeLoop(*ctfDiagIf)
 
+		// Node provisioning is NOT automatic and NOT periodic -- see nodecfg.go.
+		// It is triggered by the operator running ttos-provision-nodes.
+
 		// C3 telematics relay. Disabled unless an address is configured, and the
 		// address should be the AP address: binding 0.0.0.0 would put an
 		// authenticated-but-network-reachable drive bus on the wired side too.
@@ -180,6 +183,7 @@ func main() {
 	mux.HandleFunc("/api/control", handleControl)
 	mux.HandleFunc("/api/flag", handleFlag)
 	mux.HandleFunc("/api/judge", handleJudge)
+	mux.HandleFunc("/api/provision-nodes", handleProvisionNodes)
 	mux.Handle("/", uiHandler(*webdir))
 
 	ln := listenRetry(*addr)
@@ -527,6 +531,20 @@ func moveParams(cmd string) (steps uint32, rpm uint32) {
 // motorFrame builds [steps:uint32 BE][dir][rpm]. The trailing rpm byte lets each
 // wheel run at its own speed; firmware predating it (a 5-byte frame) just falls
 // back to its built-in default rpm.
+// padFrame builds a control-pad command in whichever form this car can produce.
+//
+// PROTECTED when an identity is provisioned, because the nodes will then be
+// configured and enforcing; UNPROTECTED when it is not, because an unprovisioned
+// car has no Data IDs, its nodes are therefore permissive, and it still has to
+// drive. Same decision on both sides of the bus, driven by the same fact, so the
+// two cannot disagree.
+func padFrame(id uint32, dataID uint16, dir byte, steps, rpm uint32) canbus.Frame {
+	if dataID == 0 {
+		return motorFrame(id, dir, steps, rpm)
+	}
+	return protectedMotorFrame(id, dataID, dir, steps, rpm)
+}
+
 func motorFrame(id uint32, dir byte, steps, rpm uint32) canbus.Frame {
 	if rpm < 1 {
 		rpm = 1
@@ -598,16 +616,16 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 		closeBridge()
 		setPower(false)
 		frames = []canbus.Frame{
-			motorFrame(idLMotor, 0x00, 0, straightRPM),
-			motorFrame(idRMotor, 0x00, 0, straightRPM),
+			padFrame(idLMotor, ident.DataIDL, 0x00, 0, straightRPM),
+			padFrame(idRMotor, ident.DataIDR, 0x00, 0, straightRPM),
 			bmsFrame(false),
 		}
 	case "coast":
 		// button released: clear the motor buffers so the wheels stop promptly,
 		// but leave the 12V rail on so the next press moves without re-arming.
 		frames = []canbus.Frame{
-			motorFrame(idLMotor, 0x00, 0, straightRPM),
-			motorFrame(idRMotor, 0x00, 0, straightRPM),
+			padFrame(idLMotor, ident.DataIDL, 0x00, 0, straightRPM),
+			padFrame(idRMotor, ident.DataIDR, 0x00, 0, straightRPM),
 		}
 	default:
 		ld, rd := cmdMotors(body.Cmd)
@@ -617,7 +635,8 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 		}
 		// Top up each wheel's step buffer (rpm sets the speed).
 		steps, rpm := moveParams(body.Cmd)
-		frames = append(frames, motorFrame(idLMotor, ld, steps, rpm), motorFrame(idRMotor, rd, steps, rpm))
+		frames = append(frames, padFrame(idLMotor, ident.DataIDL, ld, steps, rpm),
+			padFrame(idRMotor, ident.DataIDR, rd, steps, rpm))
 	}
 
 	if sendDrive(frames) {
