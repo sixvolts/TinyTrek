@@ -5,8 +5,8 @@ package main
 //
 // Bus ROLE NAMES, not numbers -- the drive bus is the higher-numbered interface:
 //
-//	DRIVE = can1   motors, BMS, heartbeat. Contestants only reach it in C3.
-//	DIAG  = can0   the side tap. Contestants live here.
+//	DRIVE = can0   motors, BMS, heartbeat. Contestants only reach it in C3.
+//	DIAG  = can1   the side tap. Contestants live here.
 //
 // This lives in the dashboard process on purpose. Unlock tiers are read by the UI
 // layer, written by code redemption, and have to reach the heartbeat emitter; one

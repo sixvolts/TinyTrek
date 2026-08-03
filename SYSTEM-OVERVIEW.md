@@ -1,3 +1,7 @@
+> **Bus roles, challenge design and the CTF architecture live in
+> [ARCHITECTURE.md](ARCHITECTURE.md), which is the source of truth.**
+> DRIVE is `can0`, DIAG is `can1`. Anything below that disagrees is stale.
+
 # TinyTrekOS CTF — System Overview
 
 **Status as of 2026-08-02.** Baseline vehicle platform is **complete and working**:

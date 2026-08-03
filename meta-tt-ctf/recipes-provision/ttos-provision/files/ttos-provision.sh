@@ -75,17 +75,23 @@ EOF
 
     # Let the operator console drive the car for hardware bring-up.
     #
-    # can1 is the VERIFIED drive bus on this hardware (motors + BMS answer there;
-    # confirmed 2026-08-01 by BMS 0x116 telemetry on can1 and ENOBUFS -- no ACK,
-    # i.e. no nodes -- on can0). Do NOT "correct" this to can0 from the design
-    # docs without checking the car.
+    # can0 is the drive bus: the harness lands on the CAN0 terminal, and the SPI
+    # mapping (spi0.0 -> can0, spi1.0 -> can1) is fixed by the device-tree overlay,
+    # so this is the same on every car.
+    #
+    # An earlier note here claimed can1, "verified 2026-08-01". That verification
+    # was circular: the Pi transmits its heartbeat on whichever interface is
+    # CONFIGURED as the drive bus, and observing it arrive there proves nothing. The
+    # bench has no motor nodes or BMS at all -- they are emulated on whichever wire
+    # the operator chose. The first real vehicle to run this stack settled it: its
+    # BMS beacons 0x116 on can0.
     #
     # Only set it when it is UNSET: factory mode runs on every boot, and blindly
     # rewriting this line would clobber an operator's deliberate choice (it did
     # exactly that, silently, and cost a long debugging session).
     cur_drive=$(sed -n 's/^TTOS_DASH_DRIVE=//p' "$DASH_DEFAULT" 2>/dev/null | head -n 1)
     if [ -z "$cur_drive" ]; then
-        set_dash_drive "${TTOS_FACTORY_DRIVE_IF:-can1}"
+        set_dash_drive "${TTOS_FACTORY_DRIVE_IF:-can0}"
     else
         log "factory: leaving existing TTOS_DASH_DRIVE=$cur_drive untouched"
     fi

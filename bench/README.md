@@ -24,8 +24,8 @@ sudo ./bench-up.sh          # bring both buses up, prove the role mapping
 
 | Role | arcana iface | USB port | Config | DUT side |
 |---|---|---|---|---|
-| DRIVE | `ttdrive` | `3-6.3` | classic 500 k | DUT `can1` |
-| DIAG | `ttdiag` | `3-6.4` | FD 500 k / 1 M | DUT `can0` |
+| DRIVE | `ttdrive` | `3-6.4` | classic 500 k | DUT `can0` |
+| DIAG | `ttdiag` | `3-6.3` | FD 500 k / 1 M | DUT `can1` |
 
 DUT: `192.168.4.133`, user `ttos`, unprovisioned (factory mode, password `ttos`).
 Key auth is installed from `arcana`, so scripts run without a password prompt;
@@ -70,14 +70,14 @@ cooperation from nobody.
 `harness-selftest.py` therefore adds **positive controls** (T1, T3) around the
 negative check (T2). T2 alone is unfalsifiable.
 
-### 2. Adapters are wired opposite to the brief's table (§1)
+### 2. Adapters are pinned to role names, not numbers (§1)
 
-The brief has `can0`=DIAG, `can1`=DRIVE. Here kernel `can0` was on the DRIVE bus.
-Renumbering would only move the trap, so the adapters are pinned to **role names**
-(`ttdrive`/`ttdiag`) by udev. A script that says "observe `ttdiag`" cannot be
-silently backwards.
+A script that says "observe `ttdiag`" cannot be silently backwards, whatever the
+cabling is. That paid for itself on 2026-08-03: the bus roles turned out to be the
+reverse of what the config claimed — DRIVE is the car's `can0`, not `can1` — and
+correcting the whole rig took **two lines in the udev rule and no cable moved**.
 
-The DUT keeps its own `can0`/`can1` names — those are baked into shipped `.network`
+The DUT keeps its own `can0`/`can1` names; those are baked into shipped `.network`
 files and dashboard config. The two sides never have to agree, which is the point.
 
 ### 3. Pin by USB port, not adapter serial (§2)

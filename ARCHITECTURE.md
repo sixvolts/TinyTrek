@@ -16,7 +16,7 @@ One Raspberry Pi 4 and three microcontroller nodes per car, on two CAN buses.
                     │  Raspberry Pi 4  (ttos-dashboard)    │
                     │  panel · UDS server · gateway · relay│
                     └───┬──────────────────────────┬───────┘
-              can1      │                          │   can0
+              can0      │                          │   can1
           DRIVE bus     │                          │   DIAG bus
      classic 500 kbit   │                          │   CAN FD 500k/1M
                         │                          │
@@ -29,22 +29,28 @@ One Raspberry Pi 4 and three microcontroller nodes per car, on two CAN buses.
    └────────┘ └────────┘ └─────────┘
 ```
 
-**Bus roles are names, not numbers.** The drive bus is the *higher*-numbered
-interface (`can1`), which is the opposite of the original design doc. Verified on
-hardware 2026-08-01 and again on every flash since.
+**DRIVE is `can0`, DIAG is `can1`.** The drive harness lands on the CAN0 terminal,
+and the SPI mapping (`spi0.0 → can0`, `spi1.0 → can1`) is fixed by the device-tree
+overlay — so this holds on every car and is not something to re-derive per vehicle.
 
-| | DRIVE (`can1`) | DIAG (`can0`) |
+This was the other way round in the config until 2026-08-03, on the strength of a
+bench observation that could not have shown it: the Pi transmits its heartbeat on
+whichever interface is *configured* as the drive bus, and the bench has no motor
+nodes or BMS at all — they are emulated on whichever wire the operator chose. The
+first real vehicle to run the stack settled it by beaconing `0x116` on `can0`.
+
+| | DRIVE (`can0`) | DIAG (`can1`) |
 |---|---|---|
 | Speed | classic CAN 2.0, 500 kbit | **CAN FD**, 500 kbit arb / 1 Mbit data |
 | Who is on it | 2 motors, BMS, Pi | Pi, and a contestant's adapter |
 | Idle traffic | heartbeat + beacon, ~23 frames/s | **silent** until a request arrives |
 
-`can1` is classic because the motor nodes are MCP2515, which has no FD support at
+`can0` is classic because the motor nodes are MCP2515, which has no FD support at
 all — an FD frame there is a form error that drives them error-passive and then
 bus-off, stopping propulsion. FD is disabled in configuration so the Pi cannot emit
 one even by mistake.
 
-`can0` is FD because responses do not fit otherwise: VIN 20 bytes, pivot response
+`can1` is FD because responses do not fit otherwise: VIN 20 bytes, pivot response
 12, snapshot 23. **A classic-only adapter can transmit every request and will never
 receive an answer.**
 
@@ -166,8 +172,8 @@ only feedback is whether the car moved.
 In-kernel `cangw`, installed at boot, two rules, nothing inbound:
 
 ```
-cangw -A -s can1 -d can0 -f 7D1:7FF     flag frames out
-cangw -A -s can1 -d can0 -f 7D2:7FF
+cangw -A -s can0 -d can1 -f 7D1:7FF     flag frames out
+cangw -A -s can0 -d can1 -f 7D2:7FF
 ```
 
 **Nothing else crosses in either direction.** Drive traffic must not go outbound or

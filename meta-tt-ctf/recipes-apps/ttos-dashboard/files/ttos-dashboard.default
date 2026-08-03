@@ -110,12 +110,12 @@ TTOS_PIVOT_RPM=75
 # ---- CTF service layer -----------------------------------------------------
 # Bus ROLE NAMES, not numbers. The drive bus is the HIGHER-numbered interface on
 # this hardware -- verified 2026-08-01, and the opposite of the original design doc.
-#   DRIVE = can1   motors, BMS, heartbeat. Contestants only reach it in C3.
-#   DIAG  = can0   the side tap. Contestants live here. Silent until one is plugged
+#   DRIVE = can0   motors, BMS, heartbeat. Contestants only reach it in C3.
+#   DIAG  = can1   the side tap. Contestants live here. Silent until one is plugged
 #                  in; transmits fail ENOBUFS until then (a lone node gets no ACK).
 TTOS_CTF_ENABLE=1
-TTOS_CTF_DRIVE_IF=can1
-TTOS_CTF_DIAG_IF=can0
+TTOS_CTF_DRIVE_IF=can0
+TTOS_CTF_DIAG_IF=can1
 
 # Per-car challenge identity (VIN, ECU serial, fleet salt, CRC Data IDs, unlock
 # codes), staged here by first-boot provisioning. Mode 600, root-owned. Missing

@@ -94,15 +94,15 @@ else no "mcp251xfd: no controllers probed (check HAT seating, overlays, SPI)"; f
 [ -n "$DM" ] && printf '%s\n' "$DM" | tail -n 4 | sed 's/^/         /'
 
 # ---------------------------------------------------------------------------
-# Role names, not numbers -- DRIVE is the HIGHER-numbered interface here (can1),
-# the opposite of the original design doc.
-#   DIAG  can0  CAN FD, 500k/1M  -- 64-byte diagnostic responses, no ISO-TP needed.
+# Role names, not numbers. The drive harness lands on the CAN0 terminal, and the
+# SPI mapping is fixed by the device-tree overlay, so this holds on every car.
+#   DIAG  can1  CAN FD, 500k/1M  -- 64-byte diagnostic responses, no ISO-TP needed.
 #                                   Only contestant test adapters live here.
-#   DRIVE can1  CLASSIC 2.0, 500k -- every node on it is classic-only (the motor
+#   DRIVE can0  CLASSIC 2.0, 500k -- every node on it is classic-only (the motor
 #                                   nodes are MCP2515, no FD support whatsoever).
-# can1 must NOT report FD: an FD frame is a form error to those nodes and takes the
+# can0 must NOT report FD: an FD frame is a form error to those nodes and takes the
 # drivetrain to bus-off. Keeping FD off means the controller cannot emit one.
-hdr "4. CAN interfaces  (DIAG=can0 FD 500k/1M; DRIVE=can1 classic 500k)"
+hdr "4. CAN interfaces  (DRIVE=can0 classic 500k; DIAG=can1 FD 500k/1M)"
 check_can(){ # $1=iface  $2=expect_fd(0/1)
     ifc=$1; fd=$2
     if ! ip link show "$ifc" >/dev/null 2>&1; then no "$ifc does not exist"; return; fi
@@ -137,8 +137,8 @@ check_can(){ # $1=iface  $2=expect_fd(0/1)
     fi
     [ "$STATE" = "ERROR-ACTIVE" ] && ok "$ifc state ERROR-ACTIVE" || sk "$ifc state = ${STATE:-?} (ERROR-ACTIVE needs a wired, terminated bus)"
 }
-check_can can0 1   # DIAG: must be FD
-check_can can1 0   # DRIVE: must be classic -- FD here would bus-off the motor nodes
+check_can can0 0   # DRIVE: must be CLASSIC -- FD here would bus-off the motor nodes
+check_can can1 1   # DIAG: must be FD -- 64-byte diagnostic responses live here
 
 # ---------------------------------------------------------------------------
 hdr "5. cangw gateway  (go/no-go: cangw works; shipped DRIVE->DIAG policy is live)"
@@ -156,7 +156,7 @@ if have cangw; then
         # before reaching it. Verify the SHIPPED policy instead of mutating it.
         for gwid in 7D1 7D2; do
             if echo "$GWL" | grep -q -- "-s can1 -d can0 -f ${gwid}:"; then
-                ok "gateway rule present: DRIVE(can1) -> DIAG(can0) ${gwid}"
+                ok "gateway rule present: DRIVE(can0) -> DIAG(can1) ${gwid}"
             else
                 no "gateway rule MISSING: can1 -> can0 ${gwid} (is ttos-cangw.service running?)"
             fi

@@ -1,14 +1,16 @@
 # TTOS CTF bench rig -- pin the two PCAN-USB FD adapters to ROLE names.
 #
 # WHY ROLE NAMES AND NOT can0/can1:
-# The bench doc's topology table says can0=DIAG, can1=DRIVE. On this rig the
-# physical wiring is the OPPOSITE: kernel can0 (USB port 3-6.3) is on the DUT's
-# DRIVE bus, proven 2026-08-03 by the 0x100 heartbeat arriving there at 200 ms.
-# Renumbering the adapters to match the doc would just move the trap. Naming them
-# by role removes it: `ttdrive` is the drive bus by definition, on both sides of
-# the link, and a test that says "observe ttdiag" cannot be silently backwards.
+# A test that says "observe ttdiag" cannot be silently backwards, whatever the
+# cabling happens to be. That mattered more than expected: the roles were assigned
+# here the other way round until 2026-08-03, following a claim that the DUT's can1
+# was the drive bus. It was not -- the drive harness lands on the CAN0 terminal on
+# a real car, and the Pi's config now matches. Only these two lines changed; no
+# cable moved. That is the whole point of naming by role.
 #
-# The DUT keeps its own can0/can1 names (DIAG=can0, DRIVE=can1 there) because
+# arcana 3-6.3 is wired to the DUT's can1, and 3-6.4 to the DUT's can0.
+#
+# The DUT keeps its own can0/can1 names (DRIVE=can0, DIAG=can1 there) because
 # those are baked into the shipped .network files and the dashboard config. The
 # bench is the only place these names exist, so the two never have to agree --
 # which is the point. Read every bench script as roles, never as numbers.
@@ -26,5 +28,5 @@
 # Install:  sudo cp 99-ttos-bench-can.rules /etc/udev/rules.d/
 #           sudo udevadm control --reload && sudo udevadm trigger -s net
 
-SUBSYSTEM=="net", ACTION=="add", ENV{ID_PATH}=="pci-0000:06:00.3-usb-0:6.3:1.0", NAME="ttdrive"
-SUBSYSTEM=="net", ACTION=="add", ENV{ID_PATH}=="pci-0000:06:00.3-usb-0:6.4:1.0", NAME="ttdiag"
+SUBSYSTEM=="net", ACTION=="add", ENV{ID_PATH}=="pci-0000:06:00.3-usb-0:6.3:1.0", NAME="ttdiag"
+SUBSYSTEM=="net", ACTION=="add", ENV{ID_PATH}=="pci-0000:06:00.3-usb-0:6.4:1.0", NAME="ttdrive"
