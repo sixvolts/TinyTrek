@@ -105,6 +105,15 @@ func bridgeLoop(diagIface string) {
 		if !bridgeIDs[f.ID] || !bridgeOpen() {
 			continue
 		}
+		// PROTECTION IS ENFORCED HERE. An unprotected or bad-CRC frame is dropped
+		// and nothing is said about it -- see protectionValid() in protect.go for
+		// why the check lives on the Pi, and why silence is mandatory. A contestant
+		// replaying captured pivot frames passes trivially, because those frames
+		// are valid; a contestant who has not recovered the Data ID cannot make the
+		// car move, which is the whole of Challenge 3.
+		if !protectionValid(f) {
+			continue
+		}
 		// Forward the payload VERBATIM -- protection bytes included and unaltered.
 		// The whole C2 solve is composing two captured, still-valid frames; a
 		// bridge that rewrote or re-CRC'd anything would either invalidate the

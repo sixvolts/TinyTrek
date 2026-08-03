@@ -38,7 +38,21 @@ TTOS_CHALLENGE=1 ./build.sh <fqbn>
 TTOS_CHALLENGE=1 ./build.sh <fqbn> TinytrekBMS /dev/ttyACM0
 ```
 
-**THREE BINARIES FOR THE WHOLE FLEET** — left motor, right motor, BMS. Build once,
+**ONLY THE BMS NEEDS THE CHALLENGE BUILD.** Motor nodes stay BASELINE.
+
+Message protection is enforced by the Pi at its two inbound gates -- the C2 bridge
+window and the C3 relay -- rather than by the motor nodes. That is not a weakening:
+those are the only two routes a contestant has to the drive bus, which is what the
+gateway policy exists to guarantee, so "you must recover the Data ID before the car
+will move" still holds exactly as before.
+
+It is done that way because node-side enforcement cannot coexist with two hard
+requirements: an UNPROVISIONED car must drive, and the car must drive after
+Challenge 3. An unprovisioned Pi has no Data IDs -- they arrive in provision.src --
+so it cannot build a protected frame, and nodes that accept nothing else leave the
+car undrivable until it is provisioned.
+
+So: **8 BMS flashes, not 24.** Build once,
 flash all eight cars from the same artifacts. Any node is a drop-in for the same
 position on any car, so a car that dies mid-challenge can be swapped out without a
 team losing the work they have done.
@@ -122,8 +136,8 @@ grinds at 75, try 150 before going back to 50, and change it in **both** places.
 
 ## After flashing car 01, check these in order
 
-1. **It still drives.** Baseline behaviour must survive. If it does not, the CRC
-   disagrees — see above, it will fail silently.
+1. **It still drives** from the control pad, provisioned or not. Motors are
+   baseline, so this should be unaffected -- if it is not, something else changed.
 2. **The C1 pivot turns ~45° and does not grind.** This is the mechanical half of the
    75 rpm decision and the only place it can be answered.
 3. **`0x7D1` on a same-direction translation**, `0x7D2` on sustained forged

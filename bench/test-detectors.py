@@ -20,6 +20,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 
 from ttoscan import DRIVE, Frame, Injector  # noqa: E402
+from carreset import reset_car  # noqa: E402
 
 ID_L, ID_R = 0x111, 0x113
 # Must track TTOS_PIVOT_RPM / the BMS PIVOT_RPM. Frames carrying this rpm are the
@@ -160,6 +161,7 @@ def stop_breaks_run(inj):
 
 def main():
     print("\nC2 / C3 detection rules\n")
+    reset_car()   # see carreset.py -- an unlocked car has its detectors stood down
     #     name                                        scenario           C2    C3
     case(f"legit pivot (opposite dir, rpm={PIVOT_RPM}) -> expect SILENCE",
          pivot_legit, False, False)

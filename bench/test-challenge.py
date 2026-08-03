@@ -23,6 +23,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "lib"))
 
 import uds  # noqa: E402
+from carreset import reset_car  # noqa: E402
 from ttoscan import DIAG, DRIVE, Frame, Injector, Observer  # noqa: E402
 
 RED, GRN, YLW, RST = "\033[31m", "\033[32m", "\033[33m", "\033[0m"
@@ -80,6 +81,9 @@ def main():
     car = load_car(args.car)
 
     print(f"\nC2 bridge window and composition (D7-D9, C1-C4)   car {car['car_id']}\n")
+    # Detectors only fire while the car is locked. Reset first, or a prior suite's
+    # redemption disarms them and C4 fails for a reason that is correct behaviour.
+    reset_car()
 
     with uds.Tester() as t:
         # ---- D8: the decoy refuses in EVERY session -------------------------
@@ -166,31 +170,27 @@ def main():
                    f"(want False)")
 
         # ---- C3: a single-bit change is rejected silently --------------------
-        # Corrupt one bit of the CRC byte and replay inside a fresh window. The
-        # emulated motor must accept nothing and answer nothing.
+        # Enforcement moved from the motor nodes to the Pi's inbound gates, so the
+        # assertion moved with it: a corrupted frame must never REACH the drive bus,
+        # rather than reaching it and being ignored. That is a stronger check --
+        # "it was dropped" is directly observable instead of inferred from a
+        # counter -- and it is the property that actually protects C3.
         emu("reset")
         t.session(uds.SESSION_EXTENDED)
         t.routine(uds.RID_SELFTEST, uds.RC_START)
         bad = bytearray(frames[ID_L])
         bad[7] ^= 0x01
-        before = emu("status")
-        with Observer(DIAG) as og, Injector(DIAG) as inj:
-            og.drain()
+        with Observer(DRIVE) as od, Observer(DIAG) as og, Injector(DIAG) as inj:
+            od.drain(); og.drain()
             for _ in range(6):
                 inj.send(Frame(ID_L, bytes(bad)))
                 time.sleep(0.05)
-            replies = og.collect(0.8)
-        after = emu("status")
-
-        def rejected(s):
-            for line in s.splitlines():
-                if line.startswith("L:"):
-                    return int(line.split("rejected=")[1].split()[0])
-            return 0
-        grew = rejected(after) - rejected(before)
-        check("C3  single-bit modification -> silent rejection, no response",
-              grew >= 6 and not replies,
-              info=f"motor rejected {grew} frame(s) (want >= 6); "
+            crossed = od.collect(1.0, match=lambda f: f.can_id == ID_L
+                                 and f.data == bytes(bad))
+            replies = og.collect(0.6)
+        check("C3  single-bit modification -> dropped at the gate, silently",
+              not crossed and not replies,
+              info=f"{len(crossed)} corrupted frame(s) reached DRIVE (want 0); "
                    f"{len(replies)} response frame(s) on DIAG (want 0)")
 
         # ---- C4: composed opposite-pivot frames -> translation -> one 0x7D1 --

@@ -256,11 +256,21 @@ func relaySession(c net.Conn, key, driveIface string) {
 			// MCP2515 and an FD frame there is a form error that can take the
 			// drivetrain bus-off -- a contestant must not be able to brick the car
 			// they are attacking, let alone by accident.
-			if err := relaySend(f); err != nil {
-				say("ERR send failed: " + err.Error())
-				continue
+			// Protection check, then a UNIFORM answer either way.
+			//
+			// "OK queued" is deliberately non-committal: it says the relay accepted
+			// the command, not that any node acted on it. Answering "bad CRC" here
+			// would hand over a free oracle -- a contestant could sweep the
+			// protection byte and watch the reply instead of recovering the Data ID,
+			// which is the entire challenge. The only signal they get is whether the
+			// car moves, exactly as it would be if the motor nodes did the check.
+			if protectionValid(f) {
+				if err := relaySend(f); err != nil {
+					say("ERR send failed: " + err.Error())
+					continue
+				}
 			}
-			say("OK sent")
+			say("OK queued")
 
 		case "SUB":
 			if sub != nil {

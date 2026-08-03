@@ -102,6 +102,60 @@ func protectionCRC(dataID uint16, covered []byte) byte {
 // so that every captured frame is a distinct CRC input. See crcCoveredLen.
 var nonceCounter uint32
 
+// protectionValid reports whether an INBOUND drive command carries a correct
+// protection field for the motor it is addressed to.
+//
+// ENFORCEMENT LIVES HERE, ON THE PI, RATHER THAN IN MOTOR FIRMWARE.
+//
+// The layering doc puts the CRC check in the motor nodes. That cannot coexist with
+// two hard requirements: an UNPROVISIONED car must drive, and the car must drive
+// after Challenge 3. An unprovisioned Pi has no Data IDs -- they arrive in
+// provision.src -- so it cannot construct a protected frame at all, and nodes that
+// accept nothing else make the car undrivable until it is provisioned. Putting the
+// Data IDs in the image instead would mean fleet secrets in a build artifact.
+//
+// Moving the check here works because contestants have exactly TWO routes to the
+// drive bus and the Pi owns both: the 5-second C2 bridge window and the C3 relay.
+// There is no third path -- that is what the gateway policy exists to guarantee.
+// So "you must recover the Data ID before you can make the car move" still holds,
+// which is the property Challenge 3 is built on.
+//
+// What it gives up: a node-level check would also stop someone with PHYSICAL
+// drive-bus access. That is already outside the threat model -- physical access to
+// the drive bus means driving the car directly and skipping every challenge.
+//
+// What it gains: motor nodes stay BASELINE. Sixteen fewer flashes, no per-node
+// challenge build, and the silent-rejection debugging hazard disappears from the
+// hardware that is hardest to instrument.
+//
+// CALLERS MUST DROP SILENTLY. Any observable difference between "rejected" and
+// "never arrived" is a CRC oracle: it would let a contestant brute-force the
+// protection byte by watching for the frame that stops being refused, instead of
+// recovering the Data ID. The only feedback a contestant should get is whether the
+// car moved.
+func protectionValid(f canbus.Frame) bool {
+	if len(f.Data) != 8 {
+		return false
+	}
+	var dataID uint16
+	switch f.ID {
+	case idLMotor:
+		dataID = ident.DataIDL
+	case idRMotor:
+		dataID = ident.DataIDR
+	default:
+		return false
+	}
+	if dataID == 0 {
+		// No identity provisioned: there is no challenge on this car, so there is
+		// nothing to protect. Refuse anyway -- an inbound path that opens up when
+		// provisioning is missing is the wrong failure direction, and a car in that
+		// state has no bridge window or relay to reach this code through.
+		return false
+	}
+	return protectionCRC(dataID, f.Data[:crcCoveredLen]) == f.Data[7]
+}
+
 // protectedMotorFrame builds the 8-byte protected drive command:
 //
 //	byte:  0    1    2    3     4     5      6       7
