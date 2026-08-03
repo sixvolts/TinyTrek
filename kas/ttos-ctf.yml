@@ -52,6 +52,20 @@ local_conf_header:
     DL_DIR = "/yocto/downloads"
     TMPDIR = "/yocto/tmp"
 
+    # Make /var/log a REAL directory on the rootfs instead of a symlink into the
+    # /var/volatile tmpfs.
+    #
+    # Without this, journald's Storage=persistent is applied, reports no error, and
+    # still loses everything on reboot -- because /var/log -> volatile/log means the
+    # "persistent" journal is written to a tmpfs. Found on the bench 2026-08-03: the
+    # drop-in was in place, systemd accepted it, and /var/log/journal never appeared.
+    #
+    # It matters here specifically because there is no RTC and journald is the only
+    # record of a solve. Judges verify by the monotonic sequence the CTF layer logs,
+    # but the log has to survive the power-cycle that hands the station to the next
+    # team.
+    VOLATILE_LOG_DIR = "no"
+
   no-secrets: |
     # §4.2: there are deliberately NO WiFi credentials or other secrets here.
     # SSID/PSK, console password hash, and (later) Data IDs / flag codes are all

@@ -100,6 +100,9 @@ var relayEndpoint string
 
 var relaySeq uint64
 
+// relaySeqValue exposes the current sequence for the judging endpoint.
+func relaySeqValue() uint64 { return atomic.LoadUint64(&relaySeq) }
+
 func relayLog(format string, a ...any) {
 	n := atomic.AddUint64(&relaySeq, 1)
 	logf("relay", "[seq=%d car=%s] %s", n, ident.CarID, fmt.Sprintf(format, a...))

@@ -364,11 +364,32 @@ else
 fi
 
 # Raw frame views must be gated, or a locked panel leaks the C2 corpus.
-DASHFRAMES=$(sed -n 's/^TTOS_DASH_FRAMES=//p' /etc/default/ttos-dashboard 2>/dev/null | head -n 1)
-if [ -z "$DASHFRAMES" ]; then
-    ok "dashboard raw frame streaming disabled (TTOS_DASH_FRAMES empty)"
+#
+# ASK THE PANEL, do not read the config. Until Phase 5 the only gate was
+# TTOS_DASH_FRAMES being empty, so checking the variable was equivalent to checking
+# the behaviour. It is not equivalent any more: per-session tier gating is now the
+# real control and the buses are deliberately listed, so the old check fails a
+# correctly configured car. Worse, the reverse is also possible -- an empty variable
+# with broken tier logic would pass. Query what an UNAUTHENTICATED client actually
+# receives; that is the property that matters.
+DASHADDR=$(sed -n 's/^TTOS_DASH_ADDR=//p' /etc/default/ttos-dashboard 2>/dev/null | head -n 1)
+if have curl && [ -n "$DASHADDR" ]; then
+    INFO=$(curl -s --max-time 5 "http://${DASHADDR}/api/info" 2>/dev/null)
+    if [ -z "$INFO" ]; then
+        sk "panel not answering on $DASHADDR (AP down?) -- frame gating unverified"
+    elif echo "$INFO" | grep -q '"frames":\[\]'; then
+        ok "locked panel exposes no raw frame tabs (tier gating live)"
+    else
+        no "locked panel advertises frame tabs: $(echo "$INFO" | sed 's/.*"frames"://; s/,".*//') -- a locked car would leak the C2 corpus"
+    fi
 else
-    no "TTOS_DASH_FRAMES=$DASHFRAMES -- the panel will stream raw frames to anyone"
+    # Fall back to the blunt check when curl or the address is unavailable.
+    DASHFRAMES=$(sed -n 's/^TTOS_DASH_FRAMES=//p' /etc/default/ttos-dashboard 2>/dev/null | head -n 1)
+    if [ -z "$DASHFRAMES" ]; then
+        ok "dashboard raw frame streaming disabled (TTOS_DASH_FRAMES empty)"
+    else
+        sk "cannot query the panel; TTOS_DASH_FRAMES=$DASHFRAMES relies on tier gating (verify with bench/test-panel.py)"
+    fi
 fi
 
 # ---------------------------------------------------------------------------

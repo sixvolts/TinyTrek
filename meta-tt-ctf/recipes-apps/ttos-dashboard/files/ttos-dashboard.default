@@ -14,7 +14,14 @@ TTOS_DASH_IFACES=can0,can1
 # defeats the gateway policy. The bus tabs are not drawn at all when this is empty.
 # Set to can0,can1 on a bench image when you want the frame view back.
 # Phase 5 replaces this all-or-nothing gate with per-session unlock tiers.
-TTOS_DASH_FRAMES=
+# Phase 5: per-session tier gating is now the real control (DIAG after C1, DRIVE
+# after C2), so the buses are listed here and the tier decides who sees them. A
+# LOCKED panel still gets no frame tabs at all -- /api/info filters the list by
+# tier, and the SSE stream re-checks per event.
+#
+# Emptying this remains an absolute KILL SWITCH: nothing streams regardless of
+# tier. Keep it as the independent second gate, not as the primary one.
+TTOS_DASH_FRAMES=can0,can1
 
 # Interface to SEND control frames on (the drive bus). EMPTY = read-only: the
 # control buttons validate + log but do not transmit.

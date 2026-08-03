@@ -112,6 +112,7 @@ func main() {
 			go heartbeatLoop(time.Duration(hb) * time.Millisecond)
 		}
 
+		ctfDiagIface = *ctfDiagIf
 		go udsServe(*ctfDiagIf)
 
 		// C2 inbound path. Reads the DIAG bus continuously but forwards nothing
@@ -152,15 +153,33 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/events", serveEvents)
 	mux.HandleFunc("/api/info", func(w http.ResponseWriter, r *http.Request) {
+		// Tier-filtered: the UI draws a bus tab only for interfaces this session is
+		// allowed to see. A locked panel therefore has NO raw frame tabs -- not
+		// hidden by CSS, not empty, absent. The SSE gate is the real enforcement;
+		// this keeps the UI honest about what is available.
+		// Issue the session here as well as on /events: the panel calls /api/info
+		// first, and a client that never gets a cookie can never be raised past
+		// tier 0 no matter what code it redeems.
+		ensureSession(w, r)
+		tier := sessionTier(r)
+		visible := []string{}
+		for _, i := range frameIfaces {
+			if frameTier(i) <= tier {
+				visible = append(visible, i)
+			}
+		}
 		// "frames" tells the UI which bus tabs are worth drawing. Without it the UI
 		// would render tabs that sit permanently on "Waiting for frames...", which
 		// reads as a broken panel rather than a locked one.
 		writeJSON(w, map[string]any{
-			"ifaces": ifaces, "frames": frameIfaces,
+			"ifaces": ifaces, "frames": visible,
 			"car": carInfo(), "repeatMs": repeatMs,
+			"tier": tier,
 		})
 	})
 	mux.HandleFunc("/api/control", handleControl)
+	mux.HandleFunc("/api/flag", handleFlag)
+	mux.HandleFunc("/api/judge", handleJudge)
 	mux.Handle("/", uiHandler(*webdir))
 
 	ln := listenRetry(*addr)
@@ -183,9 +202,13 @@ func listenRetry(addr string) net.Listener {
 
 // ---- event publishers -----------------------------------------------------
 
-func publish(v any) {
+// publish sends an event visible at the base (locked) tier: indicators, log lines,
+// the bridging tell. Anything privileged must use publishTier.
+func publish(v any) { publishTier(tierBase, v) }
+
+func publishTier(tier int, v any) {
 	if b, err := json.Marshal(v); err == nil {
-		hub.Publish(b)
+		hub.Publish(sse.Msg{Tier: tier, Data: b})
 	}
 }
 
@@ -195,20 +218,41 @@ func publish(v any) {
 // is exactly what the gateway policy exists to prevent. Set TTOS_DASH_FRAMES on a
 // bench image when you want the frame tabs back.
 //
-// This is a blunt all-or-nothing gate. Phase 5 replaces it with per-session unlock
-// tiers, which needs per-client filtering in the SSE hub rather than a global filter
-// at the publish site.
+// Phase 5 added per-session tier gating, which is now the real control. This stays
+// as an explicit KILL SWITCH: with it empty nothing streams regardless of tier, so
+// a bug in the tier logic cannot leak the drive bus. Defence in depth, not
+// redundancy -- the two gates fail independently.
 var frameAllow = map[string]bool{}
+
+// frameTier is the minimum unlock tier for a bus's raw frames.
+//
+//	DIAG  (can0)  tier 1 -- contestants already have a physical tap on this bus,
+//	                        so showing it after C1 gives away nothing they could
+//	                        not sniff themselves.
+//	DRIVE (can1)  tier 2 -- this is the C2 corpus. Showing it earlier would let a
+//	                        contestant skip the snapshot DID and the whole
+//	                        interact-then-compose shape of C2.
+func frameTier(iface string) int {
+	if iface == ctfDiagIface {
+		return tierC1
+	}
+	return tierC2
+}
 
 func publishFrame(f canbus.Frame) {
 	if !frameAllow[f.Iface] {
 		return
 	}
-	publish(struct {
+	publishTier(frameTier(f.Iface), struct {
 		Type string       `json:"type"`
 		F    canbus.Frame `json:"f"`
 	}{"frame", f})
 }
+
+// ctfDiagIface is recorded at startup so frameTier can tell the buses apart by
+// ROLE rather than by number -- the drive bus is the higher-numbered interface on
+// this hardware, and hard-coding "can0 is diag" here would invert the gate.
+var ctfDiagIface = "can0"
 
 // logf logs to stderr and to the Debug tab.
 func logf(level, format string, a ...any) {
@@ -534,6 +578,16 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Tier gate. "stop" is deliberately ungated: an emergency stop must work from a
+	// locked panel, from a judge's phone, from a session that just expired. A safety
+	// control behind an unlock is not a safety control.
+	if body.Cmd != "stop" && sessionTier(r) < tierC3 {
+		w.WriteHeader(http.StatusForbidden)
+		writeJSON(w, map[string]any{"ok": false,
+			"msg": "drive controls are locked -- redeem the Challenge 3 code, or your session expired; re-enter your flag"})
+		return
+	}
+
 	var frames []canbus.Frame
 	switch body.Cmd {
 	case "stop":
@@ -737,6 +791,12 @@ func serveEvents(w http.ResponseWriter, r *http.Request) {
 	h.Set("Connection", "keep-alive")
 	h.Set("X-Accel-Buffering", "no")
 
+	// Establish (or refresh) the session BEFORE streaming: the tier is re-read per
+	// message below, so a stream opened at tier 3 stops carrying tier-3 payloads
+	// the moment the session lapses, rather than running privileged until the
+	// browser happens to reconnect.
+	ensureSession(w, r)
+
 	client := hub.Add()
 	defer hub.Remove(client)
 
@@ -753,8 +813,14 @@ func serveEvents(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
+			// RE-CHECK PER EVENT. Gating only at connect time would leave a
+			// long-lived SSE stream carrying privileged frames for as long as the
+			// browser held it open -- which is the whole afternoon.
+			if msg.Tier > sessionTier(r) {
+				continue
+			}
 			_, _ = w.Write([]byte("data: "))
-			_, _ = w.Write(msg)
+			_, _ = w.Write(msg.Data)
 			_, _ = w.Write([]byte("\n\n"))
 			flusher.Flush()
 		case <-ping.C:

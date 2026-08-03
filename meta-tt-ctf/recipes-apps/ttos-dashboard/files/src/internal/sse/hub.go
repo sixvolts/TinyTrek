@@ -6,14 +6,23 @@
 // dropping frames far better than it tolerates stalling the bus reader.
 package sse
 
-// Client is a per-connection channel of pre-encoded SSE payloads.
-type Client chan []byte
+// Msg is a pre-encoded SSE payload plus the minimum unlock tier allowed to see
+// it. The tier travels WITH the message rather than being decided at publish time,
+// so the fan-out cannot accidentally deliver a privileged payload to a client whose
+// tier lapsed after it connected -- the reader re-checks per message.
+type Msg struct {
+	Tier int
+	Data []byte
+}
+
+// Client is a per-connection channel of tiered SSE payloads.
+type Client chan Msg
 
 // Hub tracks connected clients and broadcasts messages to them.
 type Hub struct {
 	register   chan Client
 	unregister chan Client
-	broadcast  chan []byte
+	broadcast  chan Msg
 	clients    map[Client]struct{}
 }
 
@@ -21,7 +30,7 @@ func NewHub() *Hub {
 	return &Hub{
 		register:   make(chan Client),
 		unregister: make(chan Client),
-		broadcast:  make(chan []byte, 1024),
+		broadcast:  make(chan Msg, 1024),
 		clients:    make(map[Client]struct{}),
 	}
 }
@@ -50,7 +59,7 @@ func (h *Hub) Run() {
 
 // Publish queues a message for broadcast. Non-blocking: if the broadcast buffer
 // is full the message is dropped rather than stalling the caller (a CAN reader).
-func (h *Hub) Publish(msg []byte) {
+func (h *Hub) Publish(msg Msg) {
 	select {
 	case h.broadcast <- msg:
 	default:
