@@ -17,6 +17,10 @@ RestartSec=3
 # Unprivileged: a transient user with CAP_NET_RAW (AF_CAN socket) and
 # CAP_NET_BIND_SERVICE (bind port 80 on the AP address).
 DynamicUser=yes
+# Writable state for the DynamicUser. Currently holds only the marker recording
+# that this car has already pushed its config to the CAN nodes, which is what keeps
+# the Data IDs off the bus on every subsequent boot.
+StateDirectory=ttos-dashboard
 # The ONLY way this service can read /etc/ttos/provision.src (640 root:ttos-secrets).
 # Without it the transient user gets "permission denied" and the car serves no DIDs
 # and no unlock codes -- a dead-but-healthy-looking station. Do not drop this

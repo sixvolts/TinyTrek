@@ -30,6 +30,8 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"time"
 
 	"ttos.local/dashboard/internal/canbus"
@@ -118,7 +120,59 @@ const (
 	c3WindowMS     = 3000
 )
 
-// provisionNodes pushes the config set for a short burst. Operator-initiated only.
+// nodeProvisionMarker records that this car has already pushed its config, so the
+// burst happens on the FIRST boot after provisioning and not on every restart.
+//
+// It lives in the systemd StateDirectory because ttos-dashboard runs DynamicUser --
+// it has no writable path anywhere else, and /etc/ttos is root-owned by design.
+func nodeProvisionMarker() string {
+	dir := os.Getenv("STATE_DIRECTORY")
+	if dir == "" {
+		dir = "/var/lib/ttos-dashboard"
+	}
+	return filepath.Join(dir, "nodes-provisioned")
+}
+
+// autoProvisionNodes runs the burst once, on the first boot after the car has been
+// provisioned. Nobody should have to shell into eight cars to run a command.
+//
+// Gated on the marker rather than repeated every boot, because the burst carries the
+// Data IDs: pushing it on every restart would put the answer to Challenge 3 on the
+// bus each time a car is power-cycled, which during an event is whenever a team
+// asks for one. Once is enough -- the nodes store it in flash.
+//
+// Waits for the drive bus first. At startup the CAN interface may still be coming
+// up, and a burst sent into a closed socket provisions nothing while looking like it
+// worked.
+func autoProvisionNodes() {
+	marker := nodeProvisionMarker()
+	if _, err := os.Stat(marker); err == nil {
+		return // already done on this car
+	}
+	for i := 0; i < 60; i++ {
+		if !ident.complete {
+			return // unprovisioned car: nothing to push, nodes stay permissive
+		}
+		ctfDrive.Lock()
+		ready := ctfDrive.conn != nil
+		ctfDrive.Unlock()
+		if ready {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err := provisionNodes(); err != nil {
+		logf("error", "automatic node provisioning failed: %v -- run ttos-provision-nodes by hand", err)
+		return
+	}
+	if err := os.WriteFile(marker, []byte("done\n"), 0o644); err != nil {
+		logf("warn", "node provisioning succeeded but the marker could not be written (%v); it will repeat next boot", err)
+		return
+	}
+	logf("info", "node provisioning complete -- will not repeat on this car (re-run with ttos-provision-nodes if a node is replaced)")
+}
+
+// provisionNodes pushes the config set for a short burst.
 //
 // Repeating for a few seconds rather than sending once covers the two real cases:
 // a node still booting when the command is run, and a frame lost to a busy bus.

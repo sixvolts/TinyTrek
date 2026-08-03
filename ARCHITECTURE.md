@@ -117,10 +117,10 @@ either way, since the CAN id differs.
 binary for the whole fleet. The Pi is the only thing that carries per-car data.
 
 ```
-SETUP (operator, before the event)
-    sudo ttos-provision-nodes
+SETUP (automatic, first boot with a provisioning file present)
     → Pi bursts Data IDs, unlock codes and detector thresholds on 0x101 for ~6 s
     → nodes latch them and WRITE THEM TO FLASH
+    → Pi records that it is done, and never repeats it
 
 RUNTIME (competition)
     → nodes read from flash at boot; NOTHING is transmitted
@@ -128,11 +128,17 @@ RUNTIME (competition)
     → the relay refuses to transmit 0x101 or 0x100 at all
 ```
 
-**Why provisioning is a one-shot operator action, not periodic.** An earlier version
+Provisioning happens **automatically on the first boot after the car is
+provisioned** — drop the config on the boot partition, power on, done. Nobody shells
+into eight cars. `ttos-provision-nodes` exists only for the case where a node is
+replaced afterwards.
+
+**Why it is one-shot rather than periodic.** An earlier version
 broadcast the set at 1 Hz forever and filtered it out of the relay's read path. That
 put the value Challenge 3 exists to recover permanently on the bus a contestant is
-attacking, with a single Pi-side filter between them and it. Provisioning now happens
-before the event, with nobody listening.
+attacking, with a single Pi-side filter between them and it. It happens once, at
+setup, with nobody listening — and not on every restart, which during an event is
+whenever a team asks for a power cycle.
 
 **Why a provisioned node refuses reconfiguration.** Otherwise anyone reaching the
 drive bus could hand the motors a Data ID they already knew and forge freely,
@@ -177,76 +183,204 @@ contestants can reach over the network.
 
 ## 6. The three challenges
 
-### C1 — discovery
+The three challenges are a deliberate progression through how a modern vehicle is
+actually attacked: **talk to it, then trick it, then take it over.** Each one teaches
+a technique that transfers directly to real cars, and each depends on the one before
+it — not by an artificial gate, but because the later work genuinely needs what the
+earlier work produced.
 
-**Skill:** find the diagnostic server, enumerate DIDs, invoke a routine.
-
-1. Tap the DIAG bus. It is silent until you send something.
-2. `0x22 F1 90` → VIN.
-3. Sweep `0xF1xx`, find `0xF1A0` (snapshot) and `0xF1A1` (telematics endpoint).
-4. `0x31 01 02 01 <dir>` → RoutineControl, pivot. **The car turns 45° in place**,
-   and the positive response carries the C1 code in its routineStatusRecord.
-
-Routine IDs sit in a contiguous plausible block (`0x0201`–`0x0203`) so finding one
-makes the others the obvious next probe. The puzzle is the window and the
-composition, not the search.
-
-### C2 — bridge window and composition
-
-**Skill:** session control, reading an NRC and acting on it, composing valid frames.
-
-1. `0x22 F1 8C` (ECU serial) in the default session → **NRC `0x7F`**. The NRC names
-   its own solution.
-2. `0x10 03` extended session, retry → serial. This gate is what makes C3 require
-   the C2 work rather than merely follow it.
-3. Routine `0x0202`, obviously named "enable bridging" → **always `0x33`
-   securityAccessDenied, in every session**. It is a decoy. That door never opens.
-4. Routine `0x0203`, "self-test" → **`0x7F 31 7E` in the default session**, runs in
-   extended. While it runs it opens the inbound bridge for **5 seconds**.
-5. Invoke the pivot, read `0xF1A0` — the snapshot returns the last command sent to
-   each motor **with protection bytes intact**. Do it in both directions to get a
-   forward frame and a reverse frame.
-6. **Compose**: send both motors the frame that drives them the *same* way. That is
-   a translation, which no legitimate interface commands while the panel is locked
-   — the pivot always counter-rotates.
-7. Replay inside the 5 s window. The BMS sees it and emits **`0x7D1`**, which the
-   gateway forwards to DIAG.
-
-The panel's bridging indicator flickers to enabled during the window. That is the
-fairness tell and it lives in the **base** tier.
-
-### C3 — wireless takeover
-
-**Skill:** assembling everything, plus recognising auth logic shipped to a client.
-
-1. The panel's JavaScript contains `deriveServiceKey(vin, serial)`, served at base
-   tier. Contestants view source and find it.
-
-   ```
-   key = SHA-256(vin + ":" + serial + ":" + FLEET_SALT), hex, first 16 chars
-   ```
-
-   It uses a **bundled SHA-256, not `crypto.subtle`** — SubtleCrypto only exists in
-   a secure context and the panel is plain HTTP on the car's AP, so the obvious
-   implementation would be `undefined` and throw on the one platform it is for.
-
-2. VIN comes from C1, serial requires the C2 session work. Neither is guessable.
-3. DID `0xF1A1` gives the telematics endpoint (`192.168.244.1:29537`). The C2 panel
-   tier also names it outright — two discovery paths, because a door findable only
-   one way fails entirely for a team that misses that way.
-4. Join the car's WiFi, `AUTH <key>` on the relay. Constant-time compare;
-   malformed keys are told so, well-formed wrong ones get a generic failure;
-   per-IP rate limiting.
-5. Drive the car with forged protected frames. **This is where the Data ID work
-   pays off** — the relay drops anything with a bad CRC.
-6. Sustained same-direction commanding at a non-pivot rpm → BMS emits **`0x7D2`**.
-
-**The tier separation is mechanical, not policy.** C2's composed replay uses
-captured frames, which structurally carry the pivot rpm (75). C3 fires only on a
-rpm that is *not* the pivot's. So a C2 solve can never accidentally yield the C3
-code. `bench/test-detectors.py` asserts both directions of that.
+The car starts locked. Its operator console shows battery, 12 V state and network
+status, but no raw bus traffic and no driving controls. The only way in is the
+diagnostic connector, which is exactly the situation a technician or a researcher
+faces with an unfamiliar vehicle.
 
 ---
+
+### Challenge 1 — Discovery
+
+*"There is a computer in this car. Find it and make it do something."*
+
+**The real-world skill.** Every modern vehicle carries a diagnostic protocol called
+UDS — Unified Diagnostic Services, ISO 14229 — the language behind every scan tool,
+every dealer tester, and every emissions check. It is how a workshop reads a fault
+code, how a VIN is confirmed without crawling under the windscreen, and how an
+actuator is commanded during a service procedure. Learning to speak it unassisted,
+without a commercial tool doing it for you, is the entry point to all vehicle
+diagnostics work.
+
+**What the contestant faces.** They connect an adapter to the diagnostic bus and see
+*nothing*. This is correct and it is the first thing to understand: a diagnostic port
+is not a firehose. Unlike the vehicle's internal networks, which chatter constantly,
+a diagnostic bus is silent until something asks a question. There is no traffic to
+capture and reverse-engineer here. You have to speak first.
+
+**The work.** UDS is request–response. A tester sends a service identifier and the
+ECU answers. The two that matter here:
+
+- **ReadDataByIdentifier (`0x22`)** — "tell me the value of this named item." The
+  names are 16-bit Data Identifiers, and a handful are standardised across the whole
+  industry. `0xF190` is the VIN on essentially every car built in the last fifteen
+  years. That is the contestant's first foothold: a real identifier, on a real
+  protocol, returning a real value.
+
+- **RoutineControl (`0x31`)** — "run a procedure." This is the service a workshop
+  uses to bleed ABS brakes, cycle a window motor through its learn procedure, or
+  sweep an actuator through its range. It is the part of UDS that *makes the car do
+  things* rather than merely report on them.
+
+Having found the VIN, the contestant sweeps for other identifiers and finds two more
+in the manufacturer-specific block. Then they go looking for routines. The routine
+identifiers sit in a small contiguous group, so finding one makes its neighbours the
+obvious next probe — the puzzle is meant to be what the routines *do*, not a
+brute-force search of 65,536 numbers.
+
+**The payoff.** One of those routines is a pivot: the car spins in place, one wheel
+forward and one back, through a fixed arc. It is unmistakable, it is physical, and
+it happens because the contestant asked for it in the car's own language. The
+routine's response carries the Challenge 1 code.
+
+**Why the flag is in the response and not somewhere else.** UDS routines return a
+"routine status record" — whatever the ECU wants to report about what it just did.
+Putting the code there means the contestant has to correctly parse a real protocol
+response, not just observe that something moved.
+
+---
+
+### Challenge 2 — Sessions, and the door that is not the door
+
+*"The obvious way in is locked. Find the way that is actually open."*
+
+**The real-world skill.** Diagnostic access is layered. An ECU boots in a default
+session where it will answer harmless questions, and refuses anything consequential.
+Ask it properly — `DiagnosticSessionControl (0x10)`, extended session — and a larger
+surface opens up. This is the single most common stumbling block for people new to
+UDS: they send a valid request, get a refusal, and conclude the feature does not
+exist.
+
+It does exist. The ECU told them exactly what was wrong, in a **negative response
+code** — a one-byte reason attached to every refusal. Reading an NRC and acting on it
+is the most transferable habit in diagnostics work, and it is what this challenge
+teaches.
+
+**What the contestant faces.** One of the identifiers found in Challenge 1 — the ECU
+serial number, `0xF18C` — refuses to answer. The refusal is not a silence or an
+error; it is `serviceNotSupportedInActiveSession`. The car is saying *"not like
+this."* Change session, ask again, and it answers.
+
+**The misdirection, and why it is fair.** Among the routines is one plainly named for
+enabling diagnostic bridging. It looks like precisely what a contestant would want,
+and it **always refuses** — `securityAccessDenied`, in every session, under every
+condition. That door never opens.
+
+The routine beside it is a self-test. It sounds like housekeeping. But an actuator
+self-test genuinely needs the diagnostic tester to be able to command the actuators
+while it runs, so for **five seconds** it opens a path from the diagnostic bus to the
+vehicle's internal bus.
+
+That contrast is the lesson: **one refusal says "wrong conditions", the other says
+"never".** Distinguishing them is real diagnostic reasoning. And the security lesson
+underneath it is one that recurs constantly in real vehicles — the dangerous
+capability is rarely behind the door labelled with its name. It is a side effect of
+something that sounds routine.
+
+**The composition.** Now the contestant can inject onto the internal bus, but only
+briefly, and only two message types. They cannot invent commands: the car's motor
+controllers reject anything not carrying a correct **message protection field** — a
+checksum keyed by a value that is never transmitted. This is not invented for the
+challenge; it is AUTOSAR End-to-End protection, and it is on real safety-relevant
+buses precisely to stop this kind of injection.
+
+But they do not need to invent anything. Another identifier returns a **snapshot of
+the last commands the car sent to each wheel, protection field intact.** Run the
+pivot, read the snapshot, and you have a genuine, still-valid left-wheel command and
+a right-wheel command.
+
+The pivot drives the wheels in *opposite* directions. So the contestant takes the
+captured frames and sends both wheels the one that drives them the *same* way. They
+have composed a command the car has never issued, from parts it handed them, without
+breaking any cryptography at all.
+
+The car lurches sideways. It should not be able to do that while locked, and the
+battery management module — watching the internal bus — notices and emits the
+Challenge 2 code.
+
+**Why the snapshot exists.** The gateway deliberately never forwards internal traffic
+outward, so a contestant cannot simply listen and collect commands. Without a
+sanctioned source of valid frames, Challenge 2 would collapse into passive sniffing
+and replay. Making them *invoke* a routine and *read back* what it sent is the
+difference between watching a car and interacting with one.
+
+---
+
+### Challenge 3 — Wireless takeover
+
+*"Stop borrowing the car's own messages. Write your own."*
+
+**The real-world skill.** This is the shape of every headline vehicle compromise of
+the last decade: a network-facing service, credentials derived from data the vehicle
+will tell you if you ask, and message protection that turns out to be a checksum
+rather than a signature. Nothing here is exotic. That is the point.
+
+**Finding the door.** The car runs a telematics service on its own WiFi. It is
+discoverable two ways — a diagnostic identifier returns the host and port, and the
+console mentions the interface once Challenge 2 is solved. Two routes deliberately:
+a challenge whose entrance can only be found one way fails completely for a team that
+misses that one way, and guessing a port number is not a skill worth testing.
+
+**The credential.** The service wants a key. The key is derived from the vehicle's
+own identity:
+
+```
+key = SHA-256( VIN : ECU serial : fleet salt ), first 16 hex characters
+```
+
+Every input is obtainable. The VIN came from Challenge 1. The serial required the
+session work from Challenge 2. And the transform itself is **sitting in the console's
+JavaScript**, served to any browser that loads the locked page.
+
+**That is the vulnerability, and it is a real one.** Authentication logic shipped to
+the client is among the most common findings in connected-vehicle assessments —
+companion apps and in-car browsers routinely contain the algorithm that protects the
+thing they talk to. Shipping it here is deliberate: it makes the challenge about
+*recognising* that pattern rather than guessing at concatenation order, separators
+and truncation. A contestant who views source has the answer; a contestant who does
+not will not brute-force 64 bits.
+
+It also enforces the ordering honestly. The transform is worthless without the VIN
+and the serial, and the serial cannot be read without knowing how to change
+diagnostic session. Challenge 3 needs Challenge 2's skill, not merely its flag.
+
+**Now the protection matters.** Authenticated, the contestant has a raw path onto the
+vehicle's internal bus — and this is where Challenge 2's borrowed frames stop being
+enough. Replaying a captured command drives the car in a fixed arc at a fixed speed.
+To actually *drive* it, they must construct commands the car has never sent, which
+means producing a correct protection field, which means recovering the key that
+generates it.
+
+**What "recovering the key" actually means here**, and it is worth being precise
+because the judging depends on it. The checksum is linear over GF(2). That means a
+fixed-length key contributes a constant offset to every result, independent of the
+message. A contestant does not recover *the* key — they recover a **256-member
+equivalence class**, every member of which produces byte-identical checksums. Forgery
+works perfectly without ever identifying the "true" value, and extra captured
+messages give no further information. The real work is identifying the *algorithm* —
+which checksum, over which bytes, in which order — not extracting a secret.
+
+**The finish.** Driving the car under sustained forged commanding is a signature the
+battery management module recognises, and it emits the Challenge 3 code. Redeeming it
+unlocks full manual control of the vehicle from the console — which is, appropriately,
+the same thing the attack achieved.
+
+---
+
+### Why the three cannot be short-circuited
+
+The separation between Challenge 2 and Challenge 3 is **mechanical, not a policy
+decision**. Challenge 2's composed attack reuses captured frames, which structurally
+carry the speed the pivot routine uses. Challenge 3's detector only fires on a speed
+that never appears in the car's own legitimate traffic. So no amount of replaying can
+accidentally produce the Challenge 3 code — a contestant who has not learned to forge
+cannot stumble into it, and one who has does not need to.
 
 ## 7. Detection, arming, and judging
 
@@ -322,8 +456,9 @@ not an e-stop.
 | BMS firmware | 8 boards | **identical binary** | `./build.sh <fqbn> TinytrekBMS` |
 | Motor firmware | 16 boards | **identical binary** | `./build.sh <fqbn> TinytrekLMotor` / `RMotor` |
 
-No build-time car id anywhere. Per-car difference is one file on the Pi's boot
-partition, plus running `sudo ttos-provision-nodes` once per car during setup.
+No build-time car id anywhere, and no per-car setup command. **The entire per-car
+difference is one file on the Pi's boot partition** — drop it, power on, and the car
+provisions itself and its three nodes.
 
 ---
 

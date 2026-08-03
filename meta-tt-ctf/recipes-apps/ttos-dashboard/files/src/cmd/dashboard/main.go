@@ -120,8 +120,10 @@ func main() {
 		// this is Go and not a cangw rule.
 		go bridgeLoop(*ctfDiagIf)
 
-		// Node provisioning is NOT automatic and NOT periodic -- see nodecfg.go.
-		// It is triggered by the operator running ttos-provision-nodes.
+		// Push per-node config on the FIRST boot after this car was provisioned.
+		// Automatic on purpose: nobody should have to shell into eight cars. Not
+		// repeated on later boots -- see nodecfg.go for why that matters.
+		go autoProvisionNodes()
 
 		// C3 telematics relay. Disabled unless an address is configured, and the
 		// address should be the AP address: binding 0.0.0.0 would put an

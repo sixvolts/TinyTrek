@@ -4,9 +4,14 @@
 #
 #     sudo ttos-provision-nodes
 #
-# RUN THIS ONCE PER CAR, DURING SETUP, BEFORE THE EVENT. The values it sends are
-# the answer to Challenge 3; they must not be on the bus while a contestant is on
-# it. Nothing is transmitted at runtime -- the nodes read from flash at boot.
+# YOU DO NOT NORMALLY NEED TO RUN THIS. The car does it automatically on the first
+# boot after it is provisioned -- drop ttos-provision.conf on the boot partition,
+# power on, done. Shelling into eight cars is not a setup step.
+#
+# Run it by hand only when a NODE IS REPLACED after that first boot, since the
+# automatic push happens once and is not repeated. The values it sends are the
+# answer to Challenge 3; they must not be on the bus while a contestant is on it,
+# which is exactly why it does not repeat on every restart.
 #
 # A node that has already been provisioned IGNORES what this sends, so running it
 # again is harmless but also does nothing. To re-provision a node you have to erase
