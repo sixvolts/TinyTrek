@@ -22,6 +22,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 from ttoscan import DRIVE, Frame, Injector  # noqa: E402
 
 ID_L, ID_R = 0x111, 0x113
+# Must track TTOS_PIVOT_RPM / the BMS PIVOT_RPM. Frames carrying this rpm are the
+# ones a C2 solver replays, and they must never reach C3.
+PIVOT_RPM = 75
+DRIVE_RPM = 100      # what a contestant would plausibly teleoperate at
 FWD, REV = 0x01, 0x02
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -76,10 +80,10 @@ def case(name, fn, want_c2, want_c3):
 # ---------------------------------------------------------------- scenarios ---
 
 def pivot_legit(inj):
-    """The sanctioned C1 routine: opposite dir, rpm=50, one command per wheel."""
+    """The sanctioned C1 routine: opposite dir, the pivot rpm, one command per wheel."""
     for _ in range(10):
-        cmd(inj, ID_L, 102, FWD, 50)
-        cmd(inj, ID_R, 102, REV, 50)
+        cmd(inj, ID_L, 102, FWD, PIVOT_RPM)
+        cmd(inj, ID_R, 102, REV, PIVOT_RPM)
         time.sleep(0.15)
 
 
@@ -103,17 +107,17 @@ def single_wheel(inj):
 def brief_translation(inj):
     """Both wheels, same dir, but only a couple of commands: C2 yes, C3 no."""
     for _ in range(2):
-        cmd(inj, ID_L, 100, FWD, 50)
-        cmd(inj, ID_R, 100, FWD, 50)
+        cmd(inj, ID_L, 100, FWD, PIVOT_RPM)
+        cmd(inj, ID_R, 100, FWD, PIVOT_RPM)
         time.sleep(0.15)
 
 
 def composed_replay(inj):
     """The C2 solution technique: captured pivot frames replayed same-dir. They
-    structurally carry rpm=50, so this must reach C2 and NEVER C3 (matrix C7)."""
+    structurally carry the PIVOT rpm, so this must reach C2 and NEVER C3 (C7)."""
     for _ in range(25):
-        cmd(inj, ID_L, 102, FWD, 50)
-        cmd(inj, ID_R, 102, FWD, 50)
+        cmd(inj, ID_L, 102, FWD, PIVOT_RPM)
+        cmd(inj, ID_R, 102, FWD, PIVOT_RPM)
         time.sleep(0.08)
 
 
@@ -157,7 +161,7 @@ def stop_breaks_run(inj):
 def main():
     print("\nC2 / C3 detection rules\n")
     #     name                                        scenario           C2    C3
-    case("legit pivot (opposite dir, rpm=50) -> expect SILENCE",
+    case(f"legit pivot (opposite dir, rpm={PIVOT_RPM}) -> expect SILENCE",
          pivot_legit, False, False)
     case("pivot raised to rpm=100 (opposite dir) -> expect SILENCE",
          pivot_at_100, False, False)
@@ -165,9 +169,9 @@ def main():
          single_wheel, False, False)
     case("brief same-dir translation -> C2 only",
          brief_translation, True, False)
-    case("composed replay, rpm=50 sustained -> C2 only (matrix C7)",
+    case(f"composed replay at the pivot rpm ({PIVOT_RPM}) -> C2 only (matrix C7)",
          composed_replay, True, False)
-    case("HAZARD: composed replay of a 100 rpm pivot DOES trip C3 (breaks C7)",
+    case(f"HAZARD: if the pivot ran at {DRIVE_RPM}, composed replay would trip C3",
          composed_replay_of_100rpm_pivot, True, True)
     case("sustained forged same-dir at rpm=100 -> C2 and C3",
          sustained_forged, True, True)

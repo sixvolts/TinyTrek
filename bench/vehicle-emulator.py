@@ -87,8 +87,15 @@ LVC_TRIP_MS = 1500
 ARM_C2, ARM_C3 = 0x01, 0x02
 C3_COUNT = 15                # "15 consecutive qualifying commands"
 C3_WINDOW_S = 3.0            # "...within 3 s"
-C3_RPM = 100                 # rpm that never appears in legitimate locked traffic
-LEGIT_PIVOT_RPM = 50
+# C3 qualifies on any rpm that is NOT the pivot's -- matching TinytrekBMS's
+# `rpm != PIVOT_RPM`, NOT an equality test against one hard-coded speed.
+#
+# The prototype originally keyed on `rpm == 100` while the firmware keyed on
+# `!= PIVOT_RPM`, which are not the same rule: a contestant forging at 150 trips
+# the firmware and slips past the prototype. The divergence was invisible while the
+# pivot was 50 and driving was assumed to be 100, and surfaced only when the pivot
+# moved. The BENCH must model the firmware, or it certifies a rule nobody runs.
+PIVOT_RPM = 75               # MUST MATCH TTOS_PIVOT_RPM on the Pi and the BMS
 FLAG_EMIT_HZ = 2.0           # section D: repeatable emission, not one-shot
 
 # NOT IN THE SPEC -- tuned here, and this is exactly the kind of number the bench
@@ -296,13 +303,13 @@ class Detectors:
                     t_other, d_other, _ = other.last_cmd
                     same_dir_pair = (d_other == d
                                      and (now - t_other) <= C2_PAIR_WINDOW_S)
-            if same_dir_pair and rpm == C3_RPM:
+            if same_dir_pair and rpm != PIVOT_RPM:
                 self.c3_hits.append(now)
                 self.c3_hits = [t for t in self.c3_hits if now - t <= C3_WINDOW_S]
                 if len(self.c3_hits) >= C3_COUNT:
                     if now > self.c3_until:
                         log(f"DETECT C3: {len(self.c3_hits)} qualifying commands at "
-                            f"rpm={rpm} in {C3_WINDOW_S:.0f} s -> 0x7D2")
+                            f"rpm={rpm} (pivot is {PIVOT_RPM}) in {C3_WINDOW_S:.0f} s -> 0x7D2")
                     self.c3_until = now + C2_HOLD_S
             else:
                 # "CONSECUTIVE" -- any non-qualifying drive command breaks the run.

@@ -63,7 +63,7 @@ func main() {
 	ctfIdentPath := flag.String("ctf-identity", envOr("TTOS_CTF_IDENTITY", "/etc/ttos/provision.src"), "per-car challenge identity (VIN, serial, Data IDs, codes)")
 	pivotStepsF := flag.Uint("pivot-steps", uint(envInt("TTOS_PIVOT_STEPS", 102)), "steps per wheel for the C1 pivot routine (102 = 45 deg at 0.4411 deg/step)")
 	relayAddrF := flag.String("relay-addr", envOr("TTOS_RELAY_ADDR", ""), "C3 telematics relay listen address (empty = disabled). Bind the AP address only -- 0.0.0.0 exposes the drive bus to the wired network")
-	pivotRPMF := flag.Uint("pivot-rpm", uint(envInt("TTOS_PIVOT_RPM", 50)), "rpm for the C1 pivot routine -- see the conflict documented in protect.go before changing")
+	pivotRPMF := flag.Uint("pivot-rpm", uint(envInt("TTOS_PIVOT_RPM", 75)), "rpm for the C1 pivot routine -- see the conflict documented in protect.go before changing")
 	flag.Parse()
 	pivotSteps = uint32(*pivotStepsF)
 	pivotRPM = uint32(*pivotRPMF)

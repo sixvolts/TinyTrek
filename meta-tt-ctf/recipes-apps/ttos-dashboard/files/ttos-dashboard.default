@@ -82,21 +82,30 @@ TTOS_RELAY_ADDR=192.168.244.1:29537
 # returns the C1 unlock code. 102 steps = 45 deg at 0.4411 deg/step; the arc does
 # not depend on rpm.
 #
-# TTOS_PIVOT_RPM IS AN UNRESOLVED DESIGN CONFLICT -- read before changing it:
-#   50  is the specified value, but 50 rpm = 167 steps/s, INSIDE the steppers'
-#       mid-band resonance band. Panel turns ran at 50 until 2026-08-02 and ground
-#       audibly, which is why TTOS_DASH_TURN_RPM is now 100. Expect the C1 pivot to
-#       grind at every station.
-#   100 is quiet, but it breaks the C2/C3 tier separation. A contestant's C2 solve
-#       replays CAPTURED pivot frames, which therefore carry the pivot rpm; if that
-#       equals the rpm they would forge at, composed replay also trips C3 and the
-#       C2 solve hands out the C3 code. bench/test-detectors.py has an executable
-#       demonstration.
-# The pivot rpm must be BOTH outside the resonance band and distinct from any rpm a
-# contestant would drive at. Resolve before flashing the fleet -- this value is also
-# compiled into every BMS as PIVOT_RPM, so changing it later means reflashing 8 nodes.
+# TTOS_PIVOT_RPM: 75, chosen 2026-08-03. Provisional -- tune on a real car.
+#
+# It has to satisfy TWO constraints that pull in opposite directions:
+#
+#   MECHANICAL. rpm x 3.33 = steps/sec at 200 full steps/rev. 50 rpm = 167 pps,
+#   inside the steppers' mid-band resonance (~100-200 pps): it grinds AND drops
+#   steps, so a 102-step pivot does not actually turn 45 degrees. 100 rpm = 333 pps
+#   is verified clean on hardware. 75 rpm = 250 pps should clear the band -- this is
+#   the part that still needs a real drivetrain to confirm.
+#
+#   CHALLENGE. The C2 solve replays CAPTURED pivot frames, which structurally carry
+#   this rpm. C3 fires on sustained same-dir commanding at an rpm that is NOT this
+#   one. So this value must be one a contestant would never pick to drive at --
+#   otherwise they forge at the same speed, match the pivot rpm, and evade C3
+#   without ever knowing it. That is why 100 is not an option despite being quiet:
+#   100 is exactly what someone would choose to teleoperate at.
+#
+# 75 is above the resonance band and an odd enough value that nobody drives at it.
+# If a real car still grinds at 75, try 150 (500 pps) before going back to 50.
+#
+# MUST MATCH PIVOT_RPM in firmware/TinytrekBMS -- it is the C3 discriminator there.
+# Changing it after the fleet is flashed means reflashing eight BMS nodes.
 TTOS_PIVOT_STEPS=102
-TTOS_PIVOT_RPM=50
+TTOS_PIVOT_RPM=75
 
 # ---- CTF service layer -----------------------------------------------------
 # Bus ROLE NAMES, not numbers. The drive bus is the HIGHER-numbered interface on

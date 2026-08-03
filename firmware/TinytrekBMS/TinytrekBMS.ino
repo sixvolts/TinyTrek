@@ -51,7 +51,10 @@ const unsigned long C2_PAIR_WINDOW_MS = 250;
 const unsigned long HOLD_MS           = 1000;   // condition "still true" after last hit
 const uint8_t       C3_COUNT          = 15;     // consecutive qualifying commands
 const unsigned long C3_WINDOW_MS      = 3000;
-const uint8_t       PIVOT_RPM         = 50;     // the ONLY rpm legitimate locked traffic uses
+const uint8_t       PIVOT_RPM         = 75;     // the ONLY rpm legitimate locked traffic uses
+                                                // MUST MATCH TTOS_PIVOT_RPM on the Pi. If they diverge,
+                                                // the car fires 0x7D2 on its OWN pivot routine and leaks
+                                                // the C3 code before anyone attempts the challenge.
 const unsigned long FLAG_EMIT_MS      = 500;    // 2 Hz while the condition holds
 
 uint8_t       armMask = 0;

@@ -269,7 +269,7 @@ away from a good baseline fix. Commit as-is, tag `baseline-v1`, then start.
   used to validate the heartbeat/beacon work.
 
 ### Phase 2 — C1 (discovery)
-Pivot routine, 102 steps, `rpm`=50, opposite `dir`, one command per wheel. Flag in the
+Pivot routine, 102 steps, `rpm`=75, opposite `dir`, one command per wheel. Flag in the
 `0x31` positive response. Per-car unlock codes are in hand (§B).
 
 Also lands here: extend `ttos-provision.sh` to parse and persist the seven new keys

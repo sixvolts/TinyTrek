@@ -55,29 +55,21 @@ const crcCoveredLen = 7
 // 102 steps: at 200 full steps/rev the scale is 0.4411 deg/step, so 102 steps is a
 // 45 deg pivot. Independent of rpm -- speed does not change the arc.
 //
-// PIVOT RPM IS AN UNRESOLVED DESIGN CONFLICT. Default 50, per the brief.
+// PIVOT RPM: 75 rpm = 250 steps/sec, chosen 2026-08-03, provisional.
 //
-//	- At 50 rpm the step rate is 167 pps, which sits INSIDE the steppers' mid-band
-//	  resonance region (~100-200 pps in full step). Panel turns ran at 50 until
-//	  2026-08-02 and ground audibly; they were raised to 100 for exactly this
-//	  reason. So the C1 pivot at 50 will grind at every station.
+// Two constraints pull opposite ways. 50 rpm (167 pps) sits inside the steppers'
+// mid-band resonance, so it grinds and DROPS STEPS -- a 102-step pivot then fails
+// to turn 45 degrees. 100 rpm (333 pps) is mechanically clean but is exactly the
+// speed a contestant would teleoperate at, and since the C2 solve replays captured
+// pivot frames carrying this rpm, matching it would let them evade C3 entirely
+// without noticing. 75 clears the resonance band and is a speed nobody drives at.
 //
-//	- But raising it to 100 breaks the C2/C3 tier separation. The brief's
-//	  separation is: pivot emits rpm=50, and a contestant forging frames to
-//	  actually drive uses rpm=100, so composed replay (which reuses CAPTURED pivot
-//	  frames and therefore structurally carries the pivot rpm) can reach C2 but
-//	  never C3. Move the pivot to 100 and composed replay becomes indistinguishable
-//	  from forged teleoperation -- matrix C7 fails and C2 solvers get handed the C3
-//	  code.
-//
-// The constraint is that the pivot rpm must be BOTH outside the resonance band and
-// distinct from any rpm a contestant would plausibly drive at. 50 satisfies the
-// second and fails the first; 100 the reverse. bench/test-detectors.py has an
-// executable demonstration of the collision. Resolve before the Phase 3 firmware
-// freeze -- the motor firmware does not care, but the BMS detection rules do.
+// Still needs confirming on a real drivetrain: 250 pps is nearer the band edge than
+// the 333 pps measured clean. bench/test-detectors.py holds the executable form of
+// the challenge-side constraint.
 var (
 	pivotSteps uint32 = 102
-	pivotRPM   uint32 = 50
+	pivotRPM   uint32 = 75
 )
 
 // crc8J1850 computes CRC-8/SAE-J1850 (poly 0x1D, init 0xFF, xorout 0xFF).
