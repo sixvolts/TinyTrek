@@ -165,6 +165,11 @@ class SocketCAN(Transport):
         cid, n, data = struct.unpack("=IB3x8s", buf[:16])
         return Frame(cid & 0x1FFFFFFF, data[:n], fd=False)
 
+    def status(self):
+        return 0
+
+    bus_status = 0
+
     def close(self):
         self.sock.close()
 
@@ -286,6 +291,12 @@ class PCBUSB(Transport):
     # PCANBasic constants.
     OK = 0x00
     QRCVEMPTY = 0x20
+    # PCANBasic returns a BITFIELD, not an enum. Bus-condition bits are OR-ed into
+    # the same word as the queue status, so every check has to mask rather than
+    # compare. Getting that wrong makes a normal "queue empty, bus a bit noisy"
+    # look like a fatal error and kills the receive loop.
+    BUSLIGHT, BUSHEAVY, BUSOFF, BUSPASSIVE = 0x04, 0x08, 0x10, 0x40000
+    ANYBUSERR = BUSLIGHT | BUSHEAVY | BUSOFF | BUSPASSIVE
     MSG_STANDARD = 0x00
     MSG_FD = 0x04
     MSG_BRS = 0x08
@@ -322,6 +333,7 @@ class PCBUSB(Transport):
                              f"  channel={channel} bitrate={br.decode()}\n"
                              f"  Is the adapter plugged in, and is another program "
                              f"(SavvyCAN, can_test) holding it? The device is exclusive.")
+        self.bus_status = 0
         # InitializeFD succeeding IS the FD capability check -- the call fails
         # outright on a classic-only adapter.
         self.fd_capable = True
@@ -363,7 +375,9 @@ class PCBUSB(Transport):
         for i, b in enumerate(f.data[:n]):
             m.DATA[i] = b
         st = self.lib.CAN_WriteFD(ctypes.c_uint16(self.ch), ctypes.byref(m))
-        if st != self.OK:
+        if st & self.ANYBUSERR:
+            self.bus_status |= st & self.ANYBUSERR
+        if st & ~self.ANYBUSERR:
             raise OSError(self._err(st))
 
     def recv(self, timeout):
@@ -373,15 +387,25 @@ class PCBUSB(Transport):
         while time.monotonic() < deadline:
             st = self.lib.CAN_ReadFD(ctypes.c_uint16(self.ch),
                                      ctypes.byref(m), ctypes.byref(ts))
-            if st == self.QRCVEMPTY:
+            if st & self.ANYBUSERR:
+                # Worth knowing about but not fatal: a lone node on an unterminated
+                # or unpopulated bus reports these constantly. Record the worst seen
+                # so probe can surface it instead of the symptom being "no reply".
+                self.bus_status |= st & self.ANYBUSERR
+            if st & self.QRCVEMPTY:
                 time.sleep(0.001)
                 continue
-            if st != self.OK:
+            if st & ~(self.ANYBUSERR | self.QRCVEMPTY):
                 return None
             isfd = bool(m.MSGTYPE & self.MSG_FD)
             n = FD_LENGTHS[m.DLC] if isfd else m.DLC
             return Frame(m.ID & 0x1FFFFFFF, bytes(m.DATA[:n]), fd=isfd)
         return None
+
+    def status(self):
+        """The controller's own bus state. This is what distinguishes 'my frames
+        are going nowhere' from 'they are going out and nobody is answering'."""
+        return self.lib.CAN_GetStatus(ctypes.c_uint16(self.ch)) & 0xFFFFFFFF
 
     def close(self):
         try:
@@ -491,6 +515,61 @@ def cmd_probe(args):
         note("Every response in this tool is longer than 8 bytes: the VIN is 20,")
         note("the pivot response 12, the snapshot 23. You will be able to send")
         note("requests and will never see a reply. Get an FD-capable adapter.")
+    if getattr(tp, "bus_status", 0):
+        bits = [n for n, v in (("BUSLIGHT", 0x04), ("BUSHEAVY/WARNING", 0x08),
+                               ("BUSOFF", 0x10), ("BUSPASSIVE", 0x40000))
+                if tp.bus_status & v]
+        print(f"    bus condition: {Y}{', '.join(bits)}{X}")
+
+    # ---- transmit test -----------------------------------------------------
+    # A CAN frame is only complete when ANOTHER node acknowledges it. Alone on a
+    # wire -- unplugged, wrong connector, missing termination -- the controller
+    # retransmits forever and its error counters climb into BUSLIGHT, BUSHEAVY and
+    # finally BUSOFF. So the bus state after a transmit tells us whether anything
+    # else is out there, without needing a second machine to watch.
+    print(f"\n{B}transmit test{X}")
+    probe_req = bytes([0x02, SID_TP, 0x00])          # TesterPresent, harmless
+    try:
+        tp.send(Frame(ID_PHYS, probe_req.ljust(8, b"\x00")))
+        note("sent TesterPresent to 0x7E0")
+    except OSError as e:
+        bad(f"transmit failed outright: {e}")
+
+    reply = None
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < 1.5 and reply is None:
+        f = tp.recv(0.2)
+        if f and f.id == ID_RESP:
+            reply = f
+
+    st = tp.status() if hasattr(tp, "status") else 0
+    bits = [n for n, v in (("BUSLIGHT", 0x04), ("BUSHEAVY/WARNING", 0x08),
+                           ("BUSOFF", 0x10), ("BUSPASSIVE", 0x40000))
+            if (st | getattr(tp, "bus_status", 0)) & v]
+
+    if reply:
+        ok(f"the car answered: {reply!r}")
+        note("Transmit, receive, bit timing and wiring are all good.")
+    elif bits:
+        bad(f"no answer, and the controller reports {', '.join(bits)}")
+        note("Those bits mean NOTHING ACKNOWLEDGED the frame -- a CAN frame is only")
+        note("complete when another node acks it, so this adapter is effectively")
+        note("alone on the wire. Check that CAN-H/CAN-L are on the diagnostic pair")
+        note("and not swapped, and that the bus is terminated at both ends.")
+    else:
+        bad("no answer, but the bus is electrically healthy")
+        note("Something acknowledged the frame, so a node IS physically there and")
+        note("the wiring and bit timing are fine -- it simply did not reply. Three")
+        note("things cause that, in order of likelihood:")
+        note("")
+        note("  1. THE CAR IS NOT RUNNING A CTF IMAGE. No diagnostic server, so")
+        note("     nothing answers 0x7E0. Check: ssh in and `systemctl status")
+        note("     ttos-dashboard`, or look for 'UDS server listening' in its log.")
+        note("  2. Wrong bus. The DRIVE bus has nodes that ack but serve no")
+        note("     diagnostics. The listen below tells them apart: a busy bus")
+        note("     carrying 0x100 and 0x116 is DRIVE, a silent one is DIAG.")
+        note("  3. The dashboard is not running, or crashed at boot.")
+
     print(f"\n{B}listening for 3 s{X}")
     seen, t0 = {}, time.monotonic()
     while time.monotonic() - t0 < 3:
