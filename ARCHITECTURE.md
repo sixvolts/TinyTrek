@@ -1,9 +1,9 @@
 # TTOS CTF — architecture and challenges, as built
 
-State of the system on 2026-08-03, written from the code rather than the design
-docs. Where this disagrees with `ttos-ctf-challenge-layering.md`, **this file is
-what is actually implemented** — the deviations are listed in section 8 with the
-reason for each, and those are the ones worth arguing with.
+**This document is the source of truth for the CTF design.** It describes the system
+as built and as intended; where an older design note disagrees with it, this file
+wins. Written from the code rather than from the design docs, and kept current as
+the implementation changes.
 
 ---
 
@@ -433,21 +433,7 @@ not an e-stop.
 
 ---
 
-## 9. Deviations from the layering doc
-
-| # | Doc says | Built as | Why |
-|---|---|---|---|
-| 1 | CRC covers bytes 0–5 | **0–6, includes the nonce** | 0–5 gives exactly 2 capturable inputs *ever*, leaving 4 indistinguishable CRC models that no further capture resolves. Covering the nonce makes 3 captures pin it uniquely |
-| 2 | Data IDs and codes compiled into firmware | **provisioned over CAN, stored in flash** | one binary per node type for the whole fleet; a changed code is a reprovision, not a reflash. Nodes enforce, *and* the Pi's gates enforce — section 4 |
-| 3 | Bridge window via inbound `cangw` rules | **Go forwarder** | kernel rules need `CAP_NET_ADMIN` on the one network-reachable process |
-| 4 | Per-car Data IDs and codes | **fleet-wide** | a dying car must not cost a team their work |
-| 5 | pivot `rpm`=50 | **75** | 50 = 167 pps, inside the steppers' resonance band: it grinds and drops steps. 100 is clean but is the speed a contestant would drive at, which would let them evade C3 by accident |
-| 6 | `socketcand` on the DIAG bus | **removed entirely** | unauthenticated TCP path to a CAN bus; the C3 relay is a separate authenticated service |
-| 7 | emulator refuses motion without heartbeat | **drains regardless** | that is what the real firmware does; the interlock is electrical (the BMS holds the rail off), not in code |
-
----
-
-## 10. What is flashed where
+## 9. What is flashed where
 
 | Target | Count | Unique? | Build |
 |---|---|---|---|
@@ -462,7 +448,7 @@ provisions itself and its three nodes.
 
 ---
 
-## 11. Known gaps
+## 10. Known gaps
 
 - **No node firmware has run yet.** The BMS challenge build is compile-verified and
   its rules are validated against a Python model, but no RP2040 has executed them.

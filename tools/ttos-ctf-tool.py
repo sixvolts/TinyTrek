@@ -10,12 +10,19 @@ Standard library only, so it runs on a stock macOS Python with nothing installed
     ./ttos-ctf-tool.py snapshot
     ./ttos-ctf-tool.py monitor                      dump the diagnostic bus
 
-Transport is selected with --transport:
+Transport defaults to the right one for your platform; override with --transport:
 
-    slcan     serial adapter speaking LAWICEL/slcan  (macOS, SavvyCAN hardware)
-              ./ttos-ctf-tool.py --transport slcan --port /dev/tty.usbmodem1101 walk
-    socketcan Linux only -- the bench rig. Same logic, different wire.
+    pcan      PEAK PCAN-USB FD via libPCBUSB (MacCAN).  DEFAULT ON macOS.
+              ./ttos-ctf-tool.py walk --car 01
+    socketcan Linux, incl. the bench rig where the same adapter binds peak_usb.
               ./ttos-ctf-tool.py --transport socketcan --iface ttdiag walk
+    slcan     serial adapters speaking LAWICEL (CANable and similar).
+              ./ttos-ctf-tool.py --transport slcan --port /dev/cu.usbmodemXXXX walk
+
+A PEAK adapter is NOT a serial device on macOS -- it is a raw USB device driven by
+libPCBUSB through IOUSBKit, and creates no /dev/cu.* node at all. That is why
+--port has nothing to point at for this hardware, and why the pcan transport
+exists.
 
 ------------------------------------------------------------------------------
 YOUR ADAPTER MUST DO CAN FD.
@@ -34,8 +41,10 @@ capability problem, which is why `probe` checks it first and says so plainly.
 """
 
 import argparse
+import ctypes
 import hashlib
 import os
+import platform
 import socket
 import struct
 import sys
@@ -262,7 +271,133 @@ class SLCAN(Transport):
             pass
 
 
+class PCBUSB(Transport):
+    """PEAK PCAN-USB FD on macOS, via libPCBUSB (UV Software's MacCAN).
+
+    Hand-rolled ctypes against the PCANBasic C API rather than vendoring PEAK's
+    PCANBasic.py, so this stays ONE FILE you can copy to a laptop -- which is the
+    property that matters for something carried to an event.
+
+    The library installs to /usr/local/lib. If it is missing, install MacCAN's
+    PCBUSB driver; nothing else is needed, and nothing is pip-installed.
+    """
+    name = "pcan"
+
+    # PCANBasic constants.
+    OK = 0x00
+    QRCVEMPTY = 0x20
+    MSG_STANDARD = 0x00
+    MSG_FD = 0x04
+    MSG_BRS = 0x08
+    CHANNELS = {f"PCAN_USBBUS{i}": 0x50 + i for i in range(1, 9)}
+
+    class TPCANMsgFD(ctypes.Structure):
+        # DWORD ID; BYTE MSGTYPE; BYTE DLC; BYTE DATA[64];
+        # Default ctypes alignment matches the compiled library.
+        _fields_ = [("ID", ctypes.c_uint32),
+                    ("MSGTYPE", ctypes.c_uint8),
+                    ("DLC", ctypes.c_uint8),
+                    ("DATA", ctypes.c_uint8 * 64)]
+
+    # 500 kbit nominal / 1 Mbit data at an 80 MHz clock.
+    #
+    # These are the timings the bench adapter NEGOTIATED on this exact bus, read
+    # back from the kernel: nominal sample point 87.5%, data 75%. Matching them
+    # removes a variable -- the other node on the bus is already using them. CAN
+    # tolerates some sample-point disagreement, so a different-but-valid set will
+    # usually work; this one is known to.
+    DEFAULT_BITRATE = ("f_clock=80000000,"
+                       "nom_brp=1,nom_tseg1=139,nom_tseg2=20,nom_sjw=10,"
+                       "data_brp=2,data_tseg1=29,data_tseg2=10,data_sjw=5")
+
+    def __init__(self, channel="PCAN_USBBUS1", bitrate=None):
+        self.lib = self._load()
+        self.ch = self.CHANNELS.get(str(channel).upper(),
+                                    int(str(channel), 0) if str(channel)[:2].lower() == "0x"
+                                    else self.CHANNELS["PCAN_USBBUS1"])
+        br = (bitrate or self.DEFAULT_BITRATE).encode()
+        st = self.lib.CAN_InitializeFD(ctypes.c_uint16(self.ch), ctypes.c_char_p(br))
+        if st != self.OK:
+            raise SystemExit(f"CAN_InitializeFD failed: {self._err(st)}\n"
+                             f"  channel={channel} bitrate={br.decode()}\n"
+                             f"  Is the adapter plugged in, and is another program "
+                             f"(SavvyCAN, can_test) holding it? The device is exclusive.")
+        # InitializeFD succeeding IS the FD capability check -- the call fails
+        # outright on a classic-only adapter.
+        self.fd_capable = True
+
+    @staticmethod
+    def _load():
+        for name in ("libPCBUSB.dylib", "/usr/local/lib/libPCBUSB.dylib",
+                     "/opt/homebrew/lib/libPCBUSB.dylib"):
+            try:
+                return ctypes.cdll.LoadLibrary(name)
+            except OSError:
+                continue
+        raise SystemExit(
+            "libPCBUSB.dylib not found.\n"
+            "  A PEAK adapter on macOS needs MacCAN's PCBUSB driver -- it is a raw\n"
+            "  USB device, not a serial port, so there is no /dev/cu.* to fall back\n"
+            "  on. Install it (it lands in /usr/local/lib), then re-run.\n"
+            "  On Linux use --transport socketcan instead; the same adapter binds\n"
+            "  the in-kernel peak_usb driver there.")
+
+    def _err(self, status):
+        buf = ctypes.create_string_buffer(256)
+        self.lib.CAN_GetErrorText(ctypes.c_uint32(status), ctypes.c_uint16(0), buf)
+        return f"{buf.value.decode(errors='replace')} (0x{status:02X})"
+
+    def send(self, f):
+        m = self.TPCANMsgFD()
+        m.ID = f.id
+        if f.fd:
+            n = fd_len(len(f.data))
+            # DLC is the QUANTISED CODE, not the byte count -- the same
+            # quantisation the ISO-TP layer above already applies.
+            m.DLC = FD_LENGTHS.index(n)
+            m.MSGTYPE = self.MSG_FD | self.MSG_BRS
+        else:
+            n = len(f.data)
+            m.DLC = n
+            m.MSGTYPE = self.MSG_STANDARD
+        for i, b in enumerate(f.data[:n]):
+            m.DATA[i] = b
+        st = self.lib.CAN_WriteFD(ctypes.c_uint16(self.ch), ctypes.byref(m))
+        if st != self.OK:
+            raise OSError(self._err(st))
+
+    def recv(self, timeout):
+        m = self.TPCANMsgFD()
+        ts = ctypes.c_uint64()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            st = self.lib.CAN_ReadFD(ctypes.c_uint16(self.ch),
+                                     ctypes.byref(m), ctypes.byref(ts))
+            if st == self.QRCVEMPTY:
+                time.sleep(0.001)
+                continue
+            if st != self.OK:
+                return None
+            isfd = bool(m.MSGTYPE & self.MSG_FD)
+            n = FD_LENGTHS[m.DLC] if isfd else m.DLC
+            return Frame(m.ID & 0x1FFFFFFF, bytes(m.DATA[:n]), fd=isfd)
+        return None
+
+    def close(self):
+        try:
+            self.lib.CAN_Uninitialize(ctypes.c_uint16(self.ch))
+        except Exception:
+            pass
+
+
+def default_transport():
+    """The right one for this machine, so the common case needs no flags."""
+    return "socketcan" if platform.system() == "Linux" else "pcan"
+
+
 def open_transport(args):
+    if args.transport == "pcan":
+        return PCBUSB(args.channel, args.bitrate or None)
     if args.transport == "socketcan":
         return SocketCAN(args.iface)
     if not args.port:
@@ -348,6 +483,8 @@ def cmd_probe(args):
     tp = open_transport(args)
     print(f"\n{B}adapter{X}")
     print(f"    transport   : {tp.name}")
+    if tp.name == "pcan":
+        print(f"    channel     : {args.channel}")
     print(f"    CAN FD      : {G+'yes'+X if tp.fd_capable else R+'NO'+X}")
     if not tp.fd_capable:
         bad("This adapter cannot receive CAN FD frames.")
@@ -558,8 +695,15 @@ def cmd_monitor(args):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--transport", choices=("slcan", "socketcan"), default="slcan")
-    ap.add_argument("--port", help="serial device for slcan (macOS: /dev/tty.usbmodem*)")
+    ap.add_argument("--transport", choices=("pcan", "socketcan", "slcan"),
+                    default=default_transport(),
+                    help=f"default on this machine: {default_transport()}")
+    ap.add_argument("--channel", default="PCAN_USBBUS1",
+                    help="pcan channel (PCAN_USBBUS1..8, or a hex handle)")
+    ap.add_argument("--bitrate", default="",
+                    help="pcan FD bitrate string; default matches the bench rig's "
+                         "negotiated timing (500k/1M, 87.5%%/75%% sample points)")
+    ap.add_argument("--port", help="serial device for slcan (macOS: /dev/cu.*)")
     ap.add_argument("--iface", default="ttdiag", help="interface for socketcan")
     ap.add_argument("--salt", default=os.environ.get("TTOS_FLEET_SALT", ""),
                     help="fleet salt; also readable from the panel page source")
