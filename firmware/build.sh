@@ -3,7 +3,8 @@
 # library install needed). Requires arduino-cli.
 #
 #   ./build.sh <fqbn> [sketch]
-#     ./build.sh arduino:avr:uno                 # build all three
+#     ./build.sh arduino:avr:uno                    # baseline, all three
+#     TTOS_CHALLENGE=1 ./build.sh arduino:avr:uno   # challenge firmware
 #     ./build.sh arduino:avr:uno TinytrekBMS     # build one
 #     ./build.sh arduino:avr:uno TinytrekBMS <port>   # build + upload
 #
@@ -22,32 +23,31 @@ fi
 if [ -n "${2:-}" ]; then SKETCHES="$2"; else SKETCHES="TinytrekLMotor TinytrekRMotor TinytrekBMS"; fi
 PORT="${3:-}"
 
-# ---- per-car challenge constants -------------------------------------------
-# TTOS_CAR sets which car is being flashed. The Data IDs and the C2/C3 codes are
-# SECRETS: they live in provisioning/firmware-constants.h, which is gitignored, and
-# are staged into each sketch directory as ttos-fleet.h at build time. The staged
-# copies are gitignored too -- never commit one, and never leave one on a machine
-# that is not doing the flashing.
+# ---- challenge constants ---------------------------------------------------
+# TTOS_CHALLENGE=1 builds challenge firmware; unset builds baseline.
 #
-# Arduino only compiles headers that sit in the sketch directory, which is why this
-# copies rather than adding an include path.
-CAR="${TTOS_CAR:-}"
+# FLEET-WIDE, NOT PER-CAR (changed 2026-08-03). THREE binaries for the whole fleet
+# -- left motor, right motor, BMS -- so any node is a drop-in for the same position
+# on any car, and a car that dies mid-challenge can be swapped without a team
+# losing the work they have done. Per-car identity is all Pi-side and provisioned:
+# hostname, WiFi, VIN, ECU serial, console password.
+#
+# The constants are still SECRETS -- the Data IDs are what Challenge 3 recovers --
+# so they live in provisioning/firmware-constants.h, which is gitignored, and are
+# staged into each sketch directory as ttos-fleet.h at build time. Arduino only
+# compiles headers sitting in the sketch directory, which is why this copies rather
+# than adding an include path. The staged copies are gitignored too; delete them
+# when you are done:   rm -f firmware/*/ttos-fleet.h
 FLEET_SRC="$HERE/../provisioning/firmware-constants.h"
-if [ -n "$CAR" ]; then
-  [ -f "$FLEET_SRC" ] || { echo "TTOS_CAR=$CAR but $FLEET_SRC is missing" >&2; exit 2; }
-  case "$CAR" in [0-9][0-9]) ;; *) echo "TTOS_CAR must be two digits (01..08), got '$CAR'" >&2; exit 2;; esac
-  grep -q "TTOS_CAR_$CAR" "$FLEET_SRC" || { echo "no constants for car $CAR in $FLEET_SRC" >&2; exit 2; }
-  echo "== staging challenge constants for car $CAR =="
-  for s in $SKETCHES; do cp "$FLEET_SRC" "$HERE/$s/ttos-fleet.h"; done
+if [ -n "${TTOS_CHALLENGE:-}" ]; then
+  [ -f "$FLEET_SRC" ] || { echo "TTOS_CHALLENGE set but $FLEET_SRC is missing" >&2; exit 2; }
+  echo "== staging challenge constants (fleet-wide) =="
+  for sk in $SKETCHES; do cp "$FLEET_SRC" "$HERE/$sk/ttos-fleet.h"; done
   # An ARRAY, not a string: the property value contains a space, and word-splitting
-  # an unquoted string hands arduino-cli "-DTTOS_CHALLENGE=1" as its own argument,
-  # which it rejects as an unknown flag.
-  EXTRA_FLAGS=(--build-property "compiler.cpp.extra_flags=-DTTOS_CAR_$CAR -DTTOS_CHALLENGE=1")
+  # an unquoted string hands arduino-cli a stray argument it rejects as a flag.
+  EXTRA_FLAGS=(--build-property "compiler.cpp.extra_flags=-DTTOS_CHALLENGE=1")
 else
-  # No car selected: build the BASELINE firmware. Protection and detection compile
-  # out entirely, so an un-staged tree still builds and still drives -- which is
-  # what you want on the bench and for anyone debugging the drivetrain.
-  echo "== TTOS_CAR unset: building BASELINE firmware (no CRC checking, no detection) =="
+  echo "== TTOS_CHALLENGE unset: building BASELINE firmware (no CRC checking, no detection) =="
   EXTRA_FLAGS=()
 fi
 

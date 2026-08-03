@@ -12,8 +12,8 @@ TinytrekBMS      BMS           Feather RP2040 CAN          0x115 in / 0x116 out
 
 ## ⚠ THIS ARCHIVE CONTAINS SECRETS
 
-`provisioning/firmware-constants.h` holds **every car's Data IDs and C2/C3 unlock
-codes**. Recovering a Data ID *is* Challenge 3. Keep this off the competition floor,
+`provisioning/firmware-constants.h` holds the fleet's Data IDs and C2/C3 unlock
+codes. Recovering a Data ID *is* Challenge 3. Keep this off the competition floor,
 off shared machines, and delete it when the fleet is flashed.
 
 ---
@@ -30,14 +30,23 @@ node you are not yet ready to lock down.
 ./build.sh <fqbn> TinytrekLMotor /dev/ttyACM0   # build + upload
 ```
 
-**Challenge** — `TTOS_CAR` set to a two-digit car id. Per-car constants are staged
-from `provisioning/firmware-constants.h` into each sketch directory as
-`ttos-fleet.h`, and `-DTTOS_CAR_NN -DTTOS_CHALLENGE=1` is passed to the compiler.
+**Challenge** — `TTOS_CHALLENGE=1`. Constants are staged from
+`provisioning/firmware-constants.h` into each sketch directory as `ttos-fleet.h`.
 
 ```sh
-TTOS_CAR=01 ./build.sh <fqbn>
-TTOS_CAR=01 ./build.sh <fqbn> TinytrekBMS /dev/ttyACM0
+TTOS_CHALLENGE=1 ./build.sh <fqbn>
+TTOS_CHALLENGE=1 ./build.sh <fqbn> TinytrekBMS /dev/ttyACM0
 ```
+
+**THREE BINARIES FOR THE WHOLE FLEET** — left motor, right motor, BMS. Build once,
+flash all eight cars from the same artifacts. Any node is a drop-in for the same
+position on any car, so a car that dies mid-challenge can be swapped out without a
+team losing the work they have done.
+
+Per-car identity is all Pi-side and provisioned, never compiled: hostname, WiFi
+SSID/PSK/channel, VIN, ECU serial, console password. The VIN and serial still differ
+per car, so the C3 relay key differs per car too -- but re-deriving it on a
+replacement is a 30-second repeat of work the team has already done.
 
 **The staged `ttos-fleet.h` copies are secrets too.** Delete them when you are done:
 `rm -f firmware/*/ttos-fleet.h`.
@@ -82,7 +91,8 @@ watching for the frame that stops being ignored.
 
 **It is also why a mismatch is hard to debug.** If the Pi and the motor disagree by
 one byte, the car simply does not move and nothing anywhere says why. Flash ONE car
-first and confirm it drives before doing the other seven.
+first and confirm it drives before doing the other seven -- and since all eight are
+built from the same constants now, proving one proves the build.
 
 **BMS** — becomes the drive-bus monitor. It watches `0x111`/`0x113`, and emits
 `0x7D1` (C2 code) or `0x7D2` (C3 code) at 2 Hz while a detection condition holds:
