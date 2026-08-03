@@ -20,7 +20,7 @@ off shared machines, and delete it when the fleet is flashed.
 
 ## Two build modes
 
-**Baseline** — no `TTOS_CAR` set. Message protection and detection compile out
+**Baseline** — `TTOS_CHALLENGE` unset. Message protection and detection compile out
 entirely. The car drives normally. Use this for drivetrain debugging, and for any
 node you are not yet ready to lock down.
 
@@ -72,7 +72,7 @@ FQBN, that is why, and it is a board-variant issue rather than a logic one.
 If your MCP2515 boards use an 8 MHz crystal rather than 16:
 
 ```sh
-TTOS_CAR=01 ./build.sh <fqbn> TinytrekLMotor \
+TTOS_CHALLENGE=1 ./build.sh <fqbn> TinytrekLMotor \
   --build-property "build.extra_flags=-DCAN_CLOCK_HZ=8000000"
 ```
 
