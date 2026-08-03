@@ -10,7 +10,8 @@ derived from it or generates it. Verified against `firmware-constants.h` and
 |---|---|---|
 | `fleet-table.csv` | **no** | Master table. VIN, ECU serial, Data IDs, unlock codes, PSK, console hash |
 | `firmware-constants.h` | **no** | Per-car `TTOS_DATAID_L/_R`, `TTOS_CODE_C2/_C3`, `TTOS_PIVOT_STEPS`. Included by node firmware |
-| `ttos-provision-carNN.conf` ×8 | **no** | Drop on the FAT boot partition as `ttos-provision.conf` |
+| `ttos-provision-carNN.conf` ×8 | **no** | Per-car file, for reading and diffing |
+| `flash/car-NN/ttos-provision.conf` ×8 | **no** | **Flash-ready.** Copy this one to the FAT boot partition |
 | `judge-packet.md` | **no** | Codes, static flags, WiFi, identities, troubleshooting |
 | `OPERATOR-SECRETS.md` | **no** | Console passwords, plaintext. Never goes to the floor |
 | `gen-fleet.py` | yes | The generator. **Do not run** — see below |
@@ -19,6 +20,24 @@ derived from it or generates it. Verified against `firmware-constants.h` and
 Nothing here is committed except the two scripts, matching the repo's existing
 "never commit provisioning data" rule in `.gitignore`. **Back this directory up
 somewhere off the repo** — losing `fleet-table.csv` means reflashing every node.
+
+## Flashing: use `flash/car-NN/`, and do not rename
+
+The car checks exactly two paths and nothing else:
+
+```
+/boot/firmware/ttos-provision.conf
+/boot/ttos-provision.conf
+```
+
+A file under any other name is not found, and the car boots into FACTORY mode --
+open `TTOS-TEST` AP, `ttos`/`ttos`, no challenge identity -- with no error anywhere
+saying why. That is a silent failure that costs a reflash to notice, so
+`render-fleet.py` emits `flash/car-NN/ttos-provision.conf`: one directory per car,
+every file already named what the car looks for, nothing to rename while flashing.
+
+The top-level `ttos-provision-carNN.conf` files are the same content under
+per-car names, kept for reading and diffing. Do not flash those.
 
 ## Do not run gen-fleet.py
 

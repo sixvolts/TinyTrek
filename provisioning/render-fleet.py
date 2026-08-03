@@ -106,7 +106,18 @@ def main(outdir):
         rows = list(csv.DictReader(f))
     outdir.mkdir(parents=True, exist_ok=True)
     for r in rows:
+        # Per-car file under its own name, for reading and diffing.
         (outdir / f"ttos-provision-car{r['car_id']}.conf").write_text(car_conf(r))
+        # AND a flash-ready copy under the name the car actually looks for.
+        #
+        # ttos-provision.sh only checks /boot/firmware/ttos-provision.conf and
+        # /boot/ttos-provision.conf. A file dropped under any other name is not
+        # found, the car silently enters FACTORY mode with an open TTOS-TEST AP,
+        # and every downstream symptom looks like something else. Requiring a
+        # rename during flashing is a trap; one directory per car removes it.
+        flash = outdir / "flash" / f"car-{r['car_id']}"
+        flash.mkdir(parents=True, exist_ok=True)
+        (flash / "ttos-provision.conf").write_text(car_conf(r))
     (outdir / "judge-packet.md").write_text(judge_packet(rows))
     print(f"Rendered {len(rows)} car configs + judge-packet.md in {outdir}")
     print(f"  fleet salt: {FLEET_SALT}  (deterministic -- no values were generated)")

@@ -446,6 +446,13 @@ No build-time car id anywhere, and no per-car setup command. **The entire per-ca
 difference is one file on the Pi's boot partition** — drop it, power on, and the car
 provisions itself and its three nodes.
 
+That file must be named exactly `ttos-provision.conf`; the car checks
+`/boot/firmware/` and `/boot/` and nowhere else. A file under any other name is not
+found and the car boots into factory mode with an open `TTOS-TEST` AP and no
+challenge identity, silently. `render-fleet.py` emits `flash/car-NN/` directories
+with the file already correctly named so there is nothing to rename while
+flashing.
+
 ---
 
 ## 10. Known gaps
