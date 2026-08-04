@@ -22,11 +22,19 @@ sudo ./bench-up.sh          # bring both buses up, prove the role mapping
 
 ## Topology as wired
 
-| Role | arcana iface | USB port | Config | DUT side |
+| Role | arcana iface | Adapter | Config | Far side |
 |---|---|---|---|---|
-| DRIVE | `ttdrive` | `3-6.3` | classic 500 k | DUT `candrive` |
-| DIAG | `ttdiag` | `3-6.4` | FD 500 k / 1 M | DUT `candiag` |
-| DIAG (car) | `ttcardiag` | `0a:00.3-usb-0:3` | FD 500 k / 1 M | car 02 diagnostic port |
+| DRIVE | `ttdrive` | Pro FD ch.1 (`dev_id 0x1`) | classic 500 k | DUT `candrive` |
+| DIAG | `ttdiag` | Pro FD ch.0 (`dev_id 0x0`) | FD 500 k / 1 M | DUT `candiag` |
+| DIAG (car) | `ttcardiag` | PCAN-USB FD, `0a:00.3-usb-0:3` | FD 500 k / 1 M | car 02 diagnostic port |
+
+**The DUT rig is one dual-channel PCAN-USB Pro FD** since 2026-08-04, replacing two
+single-channel dongles. That change broke the old port-based pinning outright:
+**both channels share one `ID_PATH`**, because they are one USB interface. A rule
+keyed on the port matched whichever channel probed first and left the other as
+`can1` — the same probe-order race this project already fought on the Pi.
+`peak_usb/can_channel_id` is no help either; it reads `80FF0000` on both. The
+discriminator is `ATTR{dev_id}`, the channel index.
 
 The DUT names its own interfaces by role too, from `10-ttos-can.rules` in the
 image — `candrive` is the HAT's CAN0 terminal (`spi0.0`), `candiag` is CAN1

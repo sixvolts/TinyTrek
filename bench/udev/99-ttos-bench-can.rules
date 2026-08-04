@@ -1,53 +1,71 @@
-# TTOS CTF bench rig -- pin the two PCAN-USB FD adapters to ROLE names.
+# TTOS CTF bench rig -- pin the CAN adapters to ROLE names.
 #
 # WHY ROLE NAMES AND NOT can0/can1:
 # A test that says "observe ttdiag" cannot be silently backwards, whatever the
 # cabling happens to be.
 #
-# arcana 3-6.3 is wired to the DUT's DRIVE bus (candrive, HAT CAN0 terminal),
-# 3-6.4 to the DUT's DIAG bus (candiag, HAT CAN1).
+# ---------------------------------------------------------------------------
+# CURRENT HARDWARE (2026-08-04)
 #
-# THESE TWO LINES WERE SWAPPED FOR A DAY, 2026-08-03 to 2026-08-04, and the swap
-# was a mistake. It rode along in the commit that corrected the roles ON THE CAR
-# ("DRIVE is can0, DIAG is can1"). That car-side correction was right. But which
-# arcana USB PORT is cabled to which DUT bus is an unrelated physical fact, and it
-# was already correct -- editing it here inverted every bench observation.
+#   DUT      one PCAN-USB Pro FD, DUAL channel, on arcana port 3-6.4
+#              channel 0 (dev_id 0x0) -> DUT candiag   (DIAG bus)
+#              channel 1 (dev_id 0x1) -> DUT candrive  (DRIVE bus)
+#   car 02   one PCAN-USB FD, single channel, on the other USB controller
+#              -> the vehicle's diagnostic port
 #
-# Measured on 2026-08-04, DUT transmitting a distinct ID on each of its buses:
-#   DUT candrive 7BB -> arrived on arcana 3-6.3        (heartbeat 0x100/0x116 too)
-#   DUT candiag  7CC -> arrived on arcana 3-6.4
-# Restored to the 5be1996 mapping. No cable was moved to fix it, and none should be.
+# The DUT rig is for unit and functional work against emulated nodes; a real car
+# is the only place the real firmware, drivetrain and bus timing exist.
 #
-# The lesson: a bus-role correction on the DUT is never also a correction here.
-# Verify this file against traffic, not against reasoning about the other end.
+# ---------------------------------------------------------------------------
+# WHY dev_id AND NOT ID_PATH
 #
-# A THIRD adapter goes to a complete vehicle's diagnostic port -- `ttcardiag`. The
-# DUT rig is for unit and functional work with emulated nodes; the car is the only
-# place the real firmware, the real drivetrain and the real bus timing exist.
+# This replaced two single-channel dongles on 2026-08-04, and the change breaks the
+# old pinning strategy outright: BOTH CHANNELS OF THE PRO FD SHARE ONE ID_PATH.
+# They are one USB interface --
 #
+#   ttdiag  ID_PATH=pci-0000:06:00.3-usb-0:6.4:1.0
+#   can1    (same DEVPATH: .../3-6.4:1.0/net/...)
+#
+# -- so a port-based rule cannot tell them apart. It matched whichever channel
+# probed first and left the other to the kernel's can0/can1, which is exactly the
+# probe-order race this project already fought on the Pi.
+#
+# peak_usb/can_channel_id is NOT usable either: it reads 80FF0000 on both.
+#
+# ATTR{dev_id} is the channel index within the device -- 0x0 and 0x1, fixed by
+# which physical connector a cable is in. That is the discriminator.
+#
+# ---------------------------------------------------------------------------
+# HOW THE MAPPING WAS ESTABLISHED -- by traffic, in both directions
+#
+#   dev_id 0x1  saw the DUT's 0x100 heartbeat (50 frames in 10 s). Only the DRIVE
+#               bus carries it; the gateway does not forward it to DIAG.
+#   dev_id 0x0  saw NOTHING -- which alone proves nothing, because a silent bus and
+#               an unplugged cable look identical. POSITIVE CONTROL: a UDS VIN read
+#               on it was answered (TTKTREK13TC000001), so it is genuinely the DIAG
+#               bus and genuinely connected.
+#
+# Never establish this mapping by reasoning about the other end. A bus-role
+# correction on the DUT is not a correction here -- conflating those inverted every
+# bench observation for a day in August 2026, and nothing failed loudly, because a
+# swapped pair makes negative assertions pass for free.
+#
+# bench-up.sh re-verifies against the live 0x100 heartbeat on every run, so a
+# mis-plug aborts before any assertion runs rather than inverting its result. RUN IT
+# after touching anything physical.
+#
+# ---------------------------------------------------------------------------
 # NOTE ON SWAPPING ROLES: udev cannot rename two interfaces into each other's names
 # -- the first rename fails because the target name is still taken, and it fails
 # SILENTLY, leaving the old mapping in place. If you invert these lines, rename
 # through a temporary name by hand or reboot. That bit once already.
 #
-# The DUT keeps its own can0/can1 names (DRIVE=can0, DIAG=can1 there) because
-# those are baked into the shipped .network files and the dashboard config. The
-# bench is the only place these names exist, so the two never have to agree --
-# which is the point. Read every bench script as roles, never as numbers.
-#
-# WHY ID_PATH AND NOT SERIAL:
-# The doc says to pin by adapter serial. PEAK PCAN-USB FD publishes no USB
-# iSerial -- /sys/bus/usb/devices/*/serial does not exist for them, so there is
-# nothing to match on. ID_PATH (the physical USB port) is the available stable
-# key. Consequence: THE ROLE FOLLOWS THE PORT, NOT THE ADAPTER. Swap which port
-# a cable is plugged into and the roles swap with it.
-#
-# bench-up.sh re-verifies the mapping against live bus traffic on every run, so a
-# mis-plug is caught before any assertion runs rather than inverting its result.
-#
 # Install:  sudo cp 99-ttos-bench-can.rules /etc/udev/rules.d/
 #           sudo udevadm control --reload && sudo udevadm trigger -s net
 
-SUBSYSTEM=="net", ACTION=="add", ENV{ID_PATH}=="pci-0000:06:00.3-usb-0:6.3:1.0", NAME="ttdrive"
-SUBSYSTEM=="net", ACTION=="add", ENV{ID_PATH}=="pci-0000:06:00.3-usb-0:6.4:1.0", NAME="ttdiag"
+# DUT -- both channels of the dual adapter, told apart by channel index.
+SUBSYSTEM=="net", ACTION=="add", DRIVERS=="peak_usb", ENV{ID_PATH}=="pci-0000:06:00.3-usb-0:6.4:1.0", ATTR{dev_id}=="0x0", NAME="ttdiag"
+SUBSYSTEM=="net", ACTION=="add", DRIVERS=="peak_usb", ENV{ID_PATH}=="pci-0000:06:00.3-usb-0:6.4:1.0", ATTR{dev_id}=="0x1", NAME="ttdrive"
+
+# A whole vehicle's diagnostic port, on the other USB controller.
 SUBSYSTEM=="net", ACTION=="add", ENV{ID_PATH}=="pci-0000:0a:00.3-usb-0:3:1.0", NAME="ttcardiag"
