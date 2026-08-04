@@ -34,10 +34,9 @@ RED='\033[31m'; GRN='\033[32m'; YLW='\033[33m'; BLD='\033[1m'; RST='\033[0m'
 
 # src (relative to repo root)                                            dest                                        mode
 MANIFEST="
-meta-tt-ctf/recipes-core/systemd/systemd/can0.network|/etc/systemd/network/can0.network|0644
-meta-tt-ctf/recipes-core/systemd/systemd/can1.network|/etc/systemd/network/can1.network|0644
-meta-tt-ctf/recipes-core/systemd/systemd/10-can0.link|/etc/systemd/network/10-can0.link|0644
-meta-tt-ctf/recipes-core/systemd/systemd/10-can1.link|/etc/systemd/network/10-can1.link|0644
+meta-tt-ctf/recipes-core/systemd/systemd/candrive.network|/etc/systemd/network/candrive.network|0644
+meta-tt-ctf/recipes-core/systemd/systemd/candiag.network|/etc/systemd/network/candiag.network|0644
+meta-tt-ctf/recipes-core/systemd/systemd/10-ttos-can.rules|/etc/udev/rules.d/10-ttos-can.rules|0644
 meta-tt-ctf/recipes-core/systemd/systemd/30-wlan-ap.network|/etc/systemd/network/30-wlan-ap.network|0644
 meta-tt-ctf/recipes-support/ttos-cangw/files/ttos-cangw-policy.sh|/usr/bin/ttos-cangw-policy|0755
 meta-tt-ctf/recipes-support/ttos-cangw/files/ttos-cangw.service|/lib/systemd/system/ttos-cangw.service|0644
@@ -105,10 +104,10 @@ printf "\n${BLD}== reconfiguring ==${RST}\n"
 # Stopping ttos-cangw first is deliberate: its ExecStop flushes the rules, and
 # rules that reference an interface being bounced are better rebuilt than trusted.
 R systemctl stop ttos-cangw >/dev/null 2>&1 || true
-R "sh -c 'PATH=/sbin:/usr/sbin:\$PATH; ip link set can0 down; ip link set can1 down'" || true
+R "sh -c 'PATH=/sbin:/usr/sbin:\$PATH; ip link set candrive down; ip link set candiag down'" || true
 R systemctl daemon-reload
 R networkctl reload >/dev/null 2>&1 || true
-R "sh -c 'PATH=/sbin:/usr/sbin:\$PATH; networkctl reconfigure can0 can1'" >/dev/null 2>&1 || true
+R "sh -c 'PATH=/sbin:/usr/sbin:\$PATH; networkctl reconfigure candrive candiag'" >/dev/null 2>&1 || true
 sleep 3
 
 # networkd does not necessarily clear FD state it did not set, so verify against
@@ -118,7 +117,7 @@ sleep 3
 # than hard-coded. It was hard-coded to can1 until the bus roles were corrected on
 # 2026-08-03, at which point this silently stopped forcing anything and left the
 # drive bus in FD mode -- the exact hazard the check exists to catch.
-for IF in can0 can1; do
+for IF in candrive candiag; do
     SRC="$REPO/meta-tt-ctf/recipes-core/systemd/systemd/${IF}.network"
     [ -f "$SRC" ] || continue
     if grep -q '^FDMode=yes' "$SRC"; then
@@ -136,7 +135,7 @@ sleep 2
 
 printf "\n${BLD}== verify ==${RST}\n"
 R "sh -c 'PATH=/sbin:/usr/sbin:\$PATH
-  for i in can0 can1; do
+  for i in candrive candiag; do
     printf \"  %s  %s\n\" \"\$i\" \"\$(ip -d link show \$i | grep -oE \"bitrate [0-9]+|dbitrate [0-9]+|can state [A-Z-]+\" | tr \"\n\" \" \")\"
   done
   echo \"  cangw     \$(systemctl is-active ttos-cangw)   rules: \$(cangw -L 2>/dev/null | grep -c \"^cangw -A\")\"

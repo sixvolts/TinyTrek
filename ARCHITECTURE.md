@@ -16,7 +16,7 @@ One Raspberry Pi 4 and three microcontroller nodes per car, on two CAN buses.
                     │  Raspberry Pi 4  (ttos-dashboard)    │
                     │  panel · UDS server · gateway · relay│
                     └───┬──────────────────────────┬───────┘
-              can0      │                          │   can1
+            candrive    │                          │  candiag
           DRIVE bus     │                          │   DIAG bus
      classic 500 kbit   │                          │   CAN FD 500k/1M
                         │                          │
@@ -29,28 +29,39 @@ One Raspberry Pi 4 and three microcontroller nodes per car, on two CAN buses.
    └────────┘ └────────┘ └─────────┘
 ```
 
-**DRIVE is `can0`, DIAG is `can1`.** The drive harness lands on the CAN0 terminal,
-and the SPI mapping (`spi0.0 → can0`, `spi1.0 → can1`) is fixed by the device-tree
-overlay — so this holds on every car and is not something to re-derive per vehicle.
+**The interfaces are named for their role: `candrive` and `candiag`**, pinned to
+SPI address by `/etc/udev/rules.d/10-ttos-can.rules`. `spi0.0` is the HAT's CAN0
+terminal (the motor and BMS harness); `spi1.0` is the CAN1 terminal (the contestant
+diagnostic port). The device-tree overlay fixes that mapping, so it is identical on
+every car.
 
-This was the other way round in the config until 2026-08-03, on the strength of a
-bench observation that could not have shown it: the Pi transmits its heartbeat on
-whichever interface is *configured* as the drive bus, and the bench has no motor
-nodes or BMS at all — they are emulated on whichever wire the operator chose. The
-first real vehicle to run the stack settled it by beaconing `0x116` on `can0`.
+**They are not called `can0`/`can1` for a reason that cost days.** Left to the
+kernel, the two MCP2518FD controllers are named in whatever order they probe, and
+that order RACES — the same car, physically unchanged, came up with the drive
+harness on `can0` one boot and `can1` the next. Every symptom of that looks like a
+wiring fault, and it produced a bus-role claim recorded as "verified on hardware"
+that was simply a snapshot of one boot's dice roll.
 
-| | DRIVE (`can0`) | DIAG (`can1`) |
+Two things had to be fixed. The `.link` files that were supposed to pin the names
+could never have worked: they match on `Path=`, which compares udev's `ID_PATH`, and
+`ID_PATH` is empty for SPI-attached CAN controllers — `networkctl` said
+`Link File: n/a` on every car. And renaming to `can0`/`can1` cannot work either,
+because udev will not swap two interfaces into each other's names; the rename fails
+silently and leaves the racy order. Role names avoid the collision entirely, and a
+config that says `candrive` cannot be quietly pointing at the diagnostic bus.
+
+| | DRIVE (`candrive`) | DIAG (`candiag`) |
 |---|---|---|
 | Speed | classic CAN 2.0, 500 kbit | **CAN FD**, 500 kbit arb / 1 Mbit data |
 | Who is on it | 2 motors, BMS, Pi | Pi, and a contestant's adapter |
 | Idle traffic | heartbeat + beacon, ~23 frames/s | **silent** until a request arrives |
 
-`can0` is classic because the motor nodes are MCP2515, which has no FD support at
+`candrive` is classic because the motor nodes are MCP2515, which has no FD support at
 all — an FD frame there is a form error that drives them error-passive and then
 bus-off, stopping propulsion. FD is disabled in configuration so the Pi cannot emit
 one even by mistake.
 
-`can1` is FD because responses do not fit otherwise: VIN 20 bytes, pivot response
+`candiag` is FD because responses do not fit otherwise: VIN 20 bytes, pivot response
 12, snapshot 23. **A classic-only adapter can transmit every request and will never
 receive an answer.**
 
@@ -172,8 +183,8 @@ only feedback is whether the car moved.
 In-kernel `cangw`, installed at boot, two rules, nothing inbound:
 
 ```
-cangw -A -s can0 -d can1 -f 7D1:7FF     flag frames out
-cangw -A -s can0 -d can1 -f 7D2:7FF
+cangw -A -s candrive -d candiag -f 7D1:7FF     flag frames out
+cangw -A -s candrive -d candiag -f 7D2:7FF
 ```
 
 **Nothing else crosses in either direction.** Drive traffic must not go outbound or
