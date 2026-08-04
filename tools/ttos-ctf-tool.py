@@ -535,12 +535,28 @@ def cmd_probe(args):
     except OSError as e:
         bad(f"transmit failed outright: {e}")
 
+    # Retry the request a few times before believing the silence.
+    #
+    # Observed once on a car that had been idle for four hours: the first request
+    # got no answer, and every subsequent one did. A single lost frame at first
+    # contact should not read as a dead car -- real testers retry, and a contestant
+    # would simply press the button again. Whatever the cause, a one-shot probe
+    # turns it into a wrong diagnosis.
     reply = None
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < 1.5 and reply is None:
-        f = tp.recv(0.2)
-        if f and f.id == ID_RESP:
-            reply = f
+    for attempt in range(3):
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < 1.0 and reply is None:
+            f = tp.recv(0.2)
+            if f and f.id == ID_RESP:
+                reply = f
+        if reply:
+            if attempt:
+                note(f"answered on attempt {attempt + 1} -- the first request was lost")
+            break
+        try:
+            tp.send(Frame(ID_PHYS, probe_req.ljust(8, b"\x00")))
+        except OSError:
+            break
 
     # BURST TEST -- only meaningful if nothing replied.
     #
