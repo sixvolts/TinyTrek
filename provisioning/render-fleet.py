@@ -5,9 +5,9 @@ Render the per-car provisioning files FROM fleet-table.csv.
 It used to also emit judge-packet.md. That was dropped 2026-08-04: it had gone stale
 in a way that mattered -- it listed per-car unlock codes after the fleet went uniform,
 and it named an exact Data ID when a correct Challenge 3 solve recovers a 256-member
-equivalence class and cannot identify the true value. The judging path is /api/judge
-on the car, which is car-level and server-side; the CTFd submission flags are the
-SUBMISSION_FLAGS constant below.
+equivalence class and cannot identify the true value. Judging is a team showing an
+operator the code they recovered; the CTFd submission flags are the SUBMISSION_FLAGS
+constant below.
 
 This is NOT gen-fleet.py. gen-fleet.py *generates* random values and re-running it
 changes every Data ID, unlock code, PSK and console password -- including ones

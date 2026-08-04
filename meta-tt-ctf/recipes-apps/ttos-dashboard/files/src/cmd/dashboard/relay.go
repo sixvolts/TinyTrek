@@ -90,18 +90,23 @@ func relayNoteFail(ip string) {
 	relayFails.at[ip] = append(relayFails.at[ip], time.Now())
 }
 
-// ---- monotonic event sequence ---------------------------------------------
+// ---- relay log sequence -----------------------------------------------------
 
 // journald here is volatile and the Pi has no RTC, so timestamps are wrong until an
-// NTP sync that never happens on an AP with no internet. Judges verify solves by
-// SEQUENCE, not clock. Every consequential relay event carries one.
+// NTP sync that never happens on an AP with no internet. The sequence below gives an
+// operator reading the log a reliable ORDERING when the clock cannot.
+//
+// It is a log counter. It was briefly exposed over HTTP as though it were something
+// a judge would verify against, which overstated it considerably -- it counts log
+// lines, not solves.
+
 // relayEndpoint is what DID 0xF1A1 hands back. Set when the relay binds.
 var relayEndpoint string
 
+// relaySeq numbers relay log lines so an operator reading journald can tell
+// ordering and spot gaps. It is a LOG COUNTER and nothing more -- it was briefly
+// surfaced over HTTP as though it were a verification sequence, which it is not.
 var relaySeq uint64
-
-// relaySeqValue exposes the current sequence for the judging endpoint.
-func relaySeqValue() uint64 { return atomic.LoadUint64(&relaySeq) }
 
 func relayLog(format string, a ...any) {
 	n := atomic.AddUint64(&relaySeq, 1)

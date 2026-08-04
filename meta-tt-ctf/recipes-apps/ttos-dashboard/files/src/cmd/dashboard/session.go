@@ -78,11 +78,10 @@ func newToken() string {
 // cookies (a scanner, a scripted probe, a contestant's curl loop) grows the map
 // forever, and it is 32 bytes of token plus a struct each time.
 //
-// The consequence is not a lost challenge -- an OOM restart is the sanctioned
-// reset and teams keep the codes they redeemed -- but /api/judge's redeemed list
-// and the relay sequence number go with it, silently. ARCHITECTURE section 7 says
-// judges verify by sequence precisely because timestamps cannot be trusted, so
-// losing it with no operator record is the durable harm.
+// The consequence is bounded: a restart is the sanctioned reset, teams keep the
+// codes they already redeemed, and the detectors come back armed. It is still worth
+// preventing -- an unplanned restart mid-round is disruptive even when it is not
+// destructive, and an unbounded map on a Pi is a bad thing to leave lying around.
 func reapSessions() {
 	for {
 		time.Sleep(sessionIdle)
@@ -284,36 +283,6 @@ func markUnlocked(tier int) {
 		unlocked.c3 = true
 	}
 	unlocked.Unlock()
-}
-
-// carTiers reports the car-level record for judging. Judges cannot read progress
-// off the panel -- unlock state is session-scoped, so they would see their own
-// session, not the team's.
-func carTiers() []int {
-	unlocked.Lock()
-	defer unlocked.Unlock()
-	out := []int{}
-	if unlocked.c2 {
-		out = append(out, 2)
-	}
-	if unlocked.c3 {
-		out = append(out, 3)
-	}
-	return out
-}
-
-// handleJudge exposes the CAR-LEVEL record. Judges cannot read progress off the
-// panel, because unlock state is session-scoped and they would see their own
-// session. This is the judging path: what has this car had redeemed since its last
-// reset, with the monotonic sequence so verification does not depend on a clock
-// that is wrong until an NTP sync which never happens on an AP with no internet.
-func handleJudge(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]any{
-		"car":      ident.CarID,
-		"vin":      ident.VIN,
-		"redeemed": carTiers(),
-		"seq":      relaySeqValue(),
-	})
 }
 
 // handleProvisionNodes pushes the per-node config burst. Operator-initiated, from

@@ -180,7 +180,6 @@ func main() {
 	})
 	mux.HandleFunc("/api/control", handleControl)
 	mux.HandleFunc("/api/flag", handleFlag)
-	mux.HandleFunc("/api/judge", handleJudge)
 	mux.HandleFunc("/api/provision-nodes", handleProvisionNodes)
 	mux.Handle("/", uiHandler(*webdir))
 

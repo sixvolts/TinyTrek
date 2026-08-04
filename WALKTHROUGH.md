@@ -465,19 +465,30 @@ three before saying so**. If it prints anything other than `This car is LOCKED a
 ready for the next team` and exits 0, do not hand the car on — read the diagnosis it
 prints. It exits non-zero on failure.
 
+### Power-cycling is also a reset
+
+Pulling power and booting again returns the car to locked: no unlocks, detectors
+re-armed, and any cookie a team still holds is worthless because the server has
+forgotten the token. `ttos-reset` is faster and tells you whether it worked, so
+prefer it — but if a car is wedged, the plug is a valid reset and not a way to
+preserve progress.
+
 ### Judging
 
-```sh
-curl http://192.168.244.1/api/judge
-{"car":"02","redeemed":[2,3],"seq":13,"vin":"TTKTREK15TC000002"}
-```
+A team shows you the code they recovered. That is the whole mechanism — there is no
+endpoint to query, deliberately: one existed briefly, it was unauthenticated on the
+car's AP, and it told anyone who asked which challenges had been solved.
 
-Car-level and server-side, not session-scoped — a judge reading the panel would
-otherwise see their own browser session. Verification is by **sequence number**;
-timestamps are untrustworthy on a board with no RTC and no internet.
+Codes are **fleet-wide**, so a code alone does not prove which car a team solved, or
+that they did not overhear it. What it does prove is that somebody on that team got
+the car to emit it. If you want stronger evidence, ask them to reproduce it in front
+of you — every challenge here is repeatable, and the flag frames keep emitting at
+2 Hz for as long as the condition holds.
 
-Codes are **fleet-wide**. A code alone does not prove which car a team solved, which
-is exactly why the judging record lives on the car.
+For Challenge 3 specifically, **ask for a forged frame the car accepts, not for the
+Data ID.** They cannot give you the Data ID: a correct solve recovers a 256-member
+equivalence class and every member forges identically (see 3.5). A team that hands
+you a single "the key is 0x60B0" either got lucky or is guessing.
 
 ### The e-stop
 

@@ -107,6 +107,9 @@ def reset():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--car", default="01")
+    ap.add_argument("--reboot", action="store_true",
+                    help="also run P9: reboot the car and prove it comes back LOCKED "
+                         "(~90 s, and it reboots the DUT)")
     args = ap.parse_args()
     car = load_car(args.car)
 
@@ -135,9 +138,9 @@ def main():
     # handle and the state is server-side. No substring scan can show that, and no
     # random token can fake it.
     #
-    # Run on a THROWAWAY session so A and B are undisturbed. C1 is not written to
-    # the car-wide judging record (only C2 and C3 are), so redeeming it here leaves
-    # nothing for J or P7 to trip over.
+    # Run on a THROWAWAY session so A and B are undisturbed. C1 does not touch the
+    # car-level record (only C2 and C3 do, because only they have detectors to stand
+    # down), so redeeming it here leaves nothing for P7 to trip over.
     C = "/tmp/jarC"
     subprocess.run(SSH + [f"rm -f {C}"], capture_output=True)
     jget("/api/info", jar=C)
@@ -274,11 +277,12 @@ def main():
           masks == {0x00},
           info=f"arm masks seen: {[hex(m) for m in sorted(masks)]} (want 0x00)")
 
-    # ---- judging record ------------------------------------------------------
-    judge = jget("/api/judge")
-    check("J   judging endpoint reports the CAR record, not a session",
-          judge.get("redeemed") == [2, 3] and judge.get("car") == car["car_id"],
-          info=f"{judge}")
+    # The car-level unlock record used to be readable over /api/judge. That endpoint
+    # is gone -- it was never asked for, and it handed anyone on the AP a
+    # solved/not-solved readout. The record itself still exists and is still
+    # load-bearing: it drives the heartbeat ARM MASK, which is what P8 above and P7
+    # below assert against. The mask IS the observable, and it is a better one,
+    # because it is what the BMS actually acts on.
 
     # ---- P7: reset clears everything ----------------------------------------
     pw = os.environ.get("DUT_PASS", "ttos")
@@ -286,15 +290,61 @@ def main():
                    capture_output=True, timeout=60)
     time.sleep(3)
     infoA = jget("/api/info", jar=A)
-    judge2 = jget("/api/judge")
     with Observer(DRIVE) as od:
         od.drain()
         hb2 = od.collect(1.5, match=lambda f: f.can_id == 0x100)
     masks2 = {f.data[1] for f in hb2 if len(f.data) >= 2}
     check("P7  reset clears every unlock and re-arms the detectors",
-          infoA.get("tier", 0) == 0 and judge2.get("redeemed") == [] and masks2 == {0x03},
-          info=f"session A tier={infoA.get('tier')}, car record={judge2.get('redeemed')}, "
+          infoA.get("tier", 0) == 0 and masks2 == {0x03},
+          info=f"session A tier={infoA.get('tier')}, "
                f"arm masks={[hex(m) for m in sorted(masks2)]} (want 0x03)")
+
+    # ---- P9: a reboot returns the car to LOCKED ------------------------------
+    #
+    # Opt-in because it reboots the car and costs ~90 s. The property is worth an
+    # explicit test rather than an argument from "it is all in memory": that
+    # reasoning would stop being true the moment anyone persists unlock state to
+    # make it survive a crash, and the failure would be silent -- a car handed to
+    # the next team already unlocked, with its detectors stood down, looking normal.
+    #
+    # Three things have to be true afterwards, and the third is the one an
+    # in-memory argument does not cover on its own:
+    #   1. a fresh session is tier 0 with no frame tabs
+    #   2. the heartbeat arm mask is back to 0x03, so the BMS is detecting again
+    #   3. a cookie held from BEFORE the reboot is worthless -- the client keeps it,
+    #      but the server has forgotten it, so it cannot carry an unlock across
+    if args.reboot:
+        pw = os.environ.get("DUT_PASS", "ttos")
+        # Unlock everything first, or the check passes on a car that was already locked.
+        for code in (car["code_c1"], car["code_c2"], car["code_c3"]):
+            redeem(code, A)
+        before = jget("/api/info", jar=A).get("tier")
+        subprocess.run(SSH + [f"echo '{pw}' | sudo -S -p '' systemctl reboot"],
+                       capture_output=True, timeout=30)
+        time.sleep(20)
+        for _ in range(40):
+            up = subprocess.run(SSH + ["cut -d. -f1 /proc/uptime"],
+                                capture_output=True, text=True, timeout=15).stdout.strip()
+            if up.isdigit() and int(up) < 300:
+                break
+            time.sleep(5)
+        time.sleep(10)   # let the dashboard bind and the heartbeat start
+
+        fresh = "/tmp/jarR"
+        subprocess.run(SSH + [f"rm -f {fresh}"], capture_output=True)
+        info_new = jget("/api/info", jar=fresh)
+        info_old = jget("/api/info", jar=A)        # the pre-reboot cookie
+        with Observer(DRIVE) as od:
+            od.drain()
+            hb3 = od.collect(2.0, match=lambda f: f.can_id == 0x100)
+        masks3 = {f.data[1] for f in hb3 if len(f.data) >= 2}
+        check("P9  a reboot returns the car to LOCKED, and old cookies do not survive",
+              before == 3 and info_new.get("tier", 9) == 0 and info_new.get("frames") == []
+              and info_old.get("tier", 9) == 0 and masks3 == {0x03},
+              info=f"tier before reboot={before}; after: fresh session tier="
+                   f"{info_new.get('tier')} frames={info_new.get('frames')}, "
+                   f"pre-reboot cookie tier={info_old.get('tier')}, "
+                   f"arm masks={[hex(m) for m in sorted(masks3)]} (want 0x03)")
 
     bad = [n for n, ok in results if not ok]
     print()

@@ -448,10 +448,22 @@ The mask is driven by the **car-level** record of tiers redeemed since last rese
 would silently re-arm detection mid-event and the car would leak codes during
 ordinary driving.
 
-**Judging:** `/api/judge` returns that car-level record plus a monotonic sequence
-number. Judges cannot read progress off the panel — unlock state is session-scoped,
-so they would see their own session. Timestamps are untrustworthy (no RTC, no
-internet), so verification is by sequence.
+**A reboot returns a car to LOCKED.** Every piece of challenge state — session
+tiers, the car-level unlock record, the C2 bridge window — is in memory and nothing
+persists it, so power-cycling is a full reset. A cookie held from before the reboot
+is worthless: the client still has it, but the server has forgotten the token. The
+only thing written to disk is the node-provisioning marker, which is not challenge
+state. Verified on hardware, and asserted by `test-panel.py --reboot` (P9) so that it
+stays true if anyone later persists state to survive a crash.
+
+**There is no judging endpoint.** One existed briefly and was removed: it was never
+asked for, it was unauthenticated on the AP so it handed contestants a
+solved/not-solved readout, and the "sequence number" it reported was the relay's log
+line counter dressed up as something a judge would verify against. Judging is a team
+showing you the code they recovered.
+
+The car-level record itself stays, because it is not a judging feature — it is what
+`armMask()` reads.
 
 **Reset:** `sudo ttos-reset` on the car clears every unlock, re-arms the detectors,
 and reloads the gateway. Runnable from the serial console with no laptop, because
@@ -558,19 +570,18 @@ needs to be a visible decision rather than an accident.
   so the cost is a lost round rather than a lost event, and it requires deliberate
   sabotage. It is the one place one team's action reaches another team's challenge,
   and it is a consequence of the fleet-wide decision in section 3 rather than a bug.
-- **C1 solves are not in the judging record.** `/api/judge` reports C2 and C3 only,
-  because the record's job is driving the arm mask and C1 has no detector. A C1 solve
-  is in journald but not in the judging path.
+- **A C1 solve leaves no trace outside journald.** The car-level record tracks C2 and
+  C3 only, because its job is driving the arm mask and C1 has no detector. Nothing
+  reads it out, by design.
 - **Placards not written.** SSID, PSK, car id, the DIAG bus parameters, "CAN FD
   required", the panel URL, and "use Safari or Firefox — Chrome force-upgrades
   port 80".
 - **No judging brief for the event.** `judge-packet.md` was deleted 2026-08-04
   rather than repaired: it listed per-car unlock codes after the fleet went uniform,
   and it named an exact Data ID when a correct Challenge 3 solve recovers a
-  256-member equivalence class and cannot identify the true value. The judging
-  mechanism itself is fine and is `/api/judge` on the car (section 7); what does not
-  exist is the printed sheet a judge carries. `WALKTHROUGH.md` section 4 has the
-  substance, including what a correct C3 solve can and cannot be asked to produce.
+  256-member equivalence class and cannot identify the true value. `WALKTHROUGH.md`
+  section 4 has the substance if a printed sheet is wanted, including what a correct
+  C3 solve can and cannot be asked to produce.
 - **The remaining six cars are unflashed.** Cars 01 (bench DUT) and 02 are on the
   current image and firmware.
 
