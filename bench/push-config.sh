@@ -111,14 +111,24 @@ R networkctl reload >/dev/null 2>&1 || true
 R "sh -c 'PATH=/sbin:/usr/sbin:\$PATH; networkctl reconfigure can0 can1'" >/dev/null 2>&1 || true
 sleep 3
 
-# networkd does not necessarily clear FD state it did not set. Same trap as
-# bench-up.sh on the host side: verify against the kernel, then force if needed.
-if R "sh -c 'PATH=/sbin:/usr/sbin:\$PATH; ip -d link show can1'" | grep -q dbitrate; then
-    if ! grep -q '^FDMode=yes' "$REPO/meta-tt-ctf/recipes-core/systemd/systemd/can1.network"; then
-        printf "${YLW}  can1 still FD after reconfigure -- forcing it down/classic${RST}\n"
-        R "sh -c 'PATH=/sbin:/usr/sbin:\$PATH; ip link set can1 down; ip link set can1 up type can bitrate 500000 fd off'"
+# networkd does not necessarily clear FD state it did not set, so verify against
+# the kernel and force where needed.
+#
+# WHICH interface must be classic is DERIVED from the shipped .network files rather
+# than hard-coded. It was hard-coded to can1 until the bus roles were corrected on
+# 2026-08-03, at which point this silently stopped forcing anything and left the
+# drive bus in FD mode -- the exact hazard the check exists to catch.
+for IF in can0 can1; do
+    SRC="$REPO/meta-tt-ctf/recipes-core/systemd/systemd/${IF}.network"
+    [ -f "$SRC" ] || continue
+    if grep -q '^FDMode=yes' "$SRC"; then
+        continue    # this one is meant to be FD
     fi
-fi
+    if R "sh -c 'PATH=/sbin:/usr/sbin:\$PATH; ip -d link show $IF'" | grep -q dbitrate; then
+        printf "${YLW}  %s still FD after reconfigure -- forcing it classic${RST}\n" "$IF"
+        R "sh -c 'PATH=/sbin:/usr/sbin:\$PATH; ip link set $IF down; ip link set $IF up type can bitrate 500000 fd off'"
+    fi
+done
 
 R systemctl restart ttos-cangw || true
 R systemctl restart ttos-dashboard || true

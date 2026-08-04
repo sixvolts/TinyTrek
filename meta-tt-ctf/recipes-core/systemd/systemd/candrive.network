@@ -1,0 +1,15 @@
+# candrive -- the DRIVE bus. CLASSIC CAN 2.0, 500 kbit/s.
+#
+# Named by ROLE, pinned to SPI address by 10-ttos-can.rules. It is not can0/can1
+# any more: those names were assigned in probe order, which races, and the same car
+# came up with the buses transposed between boots. See that rule for the full story.
+#
+# NO FDMode / NO DataBitRate, deliberately. Every node here is classic-only -- the
+# motor nodes are MCP2515, which has no CAN FD support at all. A genuine FD frame
+# is a form error to them: error-passive, then bus-off, and propulsion stops.
+# Keeping FD off means the controller cannot emit one even by mistake.
+[Match]
+Name=candrive
+
+[CAN]
+BitRate=500000

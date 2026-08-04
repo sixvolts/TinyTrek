@@ -8,7 +8,16 @@
 # a real car, and the Pi's config now matches. Only these two lines changed; no
 # cable moved. That is the whole point of naming by role.
 #
-# arcana 3-6.3 is wired to the DUT's can1, and 3-6.4 to the DUT's can0.
+# arcana 3-6.3 is wired to the DUT's can1 (DIAG), 3-6.4 to the DUT's can0 (DRIVE).
+#
+# A THIRD adapter goes to a complete vehicle's diagnostic port -- `ttcardiag`. The
+# DUT rig is for unit and functional work with emulated nodes; the car is the only
+# place the real firmware, the real drivetrain and the real bus timing exist.
+#
+# NOTE ON SWAPPING ROLES: udev cannot rename two interfaces into each other's names
+# -- the first rename fails because the target name is still taken, and it fails
+# SILENTLY, leaving the old mapping in place. If you invert these lines, rename
+# through a temporary name by hand or reboot. That bit once already.
 #
 # The DUT keeps its own can0/can1 names (DRIVE=can0, DIAG=can1 there) because
 # those are baked into the shipped .network files and the dashboard config. The
@@ -30,3 +39,4 @@
 
 SUBSYSTEM=="net", ACTION=="add", ENV{ID_PATH}=="pci-0000:06:00.3-usb-0:6.3:1.0", NAME="ttdiag"
 SUBSYSTEM=="net", ACTION=="add", ENV{ID_PATH}=="pci-0000:06:00.3-usb-0:6.4:1.0", NAME="ttdrive"
+SUBSYSTEM=="net", ACTION=="add", ENV{ID_PATH}=="pci-0000:0a:00.3-usb-0:3:1.0", NAME="ttcardiag"

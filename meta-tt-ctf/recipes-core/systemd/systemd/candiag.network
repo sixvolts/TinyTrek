@@ -1,0 +1,15 @@
+# candiag -- the DIAGNOSTIC bus. CAN FD, 500 kbit/s arbitration / 1 Mbit data.
+#
+# Named by ROLE, pinned to SPI address by 10-ttos-can.rules.
+#
+# FD is required, not optional: every response worth having exceeds a classic
+# frame. VIN is 20 bytes, the pivot routine's response 12, the actuator snapshot
+# 23. A classic-only adapter can transmit every request and will never receive an
+# answer, which presents as a dead car rather than a limited adapter.
+[Match]
+Name=candiag
+
+[CAN]
+BitRate=500000
+DataBitRate=1000000
+FDMode=yes

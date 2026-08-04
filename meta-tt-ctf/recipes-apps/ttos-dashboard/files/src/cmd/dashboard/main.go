@@ -40,7 +40,7 @@ var hub = sse.NewHub()
 
 func main() {
 	addr := flag.String("addr", envOr("TTOS_DASH_ADDR", ":8080"), "listen address")
-	ifacesArg := flag.String("ifaces", envOr("TTOS_DASH_IFACES", "can0,can1"), "comma-separated CAN interfaces")
+	ifacesArg := flag.String("ifaces", envOr("TTOS_DASH_IFACES", "candrive,candiag"), "comma-separated CAN interfaces")
 	webdir := flag.String("webdir", os.Getenv("TTOS_DASH_WEBDIR"), "serve UI from disk instead of the embedded copy (dev)")
 	wifiIf := flag.String("wifi", envOr("TTOS_DASH_WIFI_IF", "wlan0"), "interface for the WiFi indicator")
 	ethIf := flag.String("eth", envOr("TTOS_DASH_ETH_IF", "eth0"), "interface for the Ethernet indicator")
@@ -58,8 +58,8 @@ func main() {
 	// CTF service layer. Role names, not numbers -- the DRIVE bus is the
 	// higher-numbered interface on this hardware (verified 2026-08-01).
 	ctfEnable := flag.Bool("ctf", envInt("TTOS_CTF_ENABLE", 1) != 0, "run the CTF service layer (heartbeat + diagnostic server)")
-	ctfDriveIf := flag.String("ctf-drive", envOr("TTOS_CTF_DRIVE_IF", "can0"), "DRIVE bus: motors, BMS, heartbeat")
-	ctfDiagIf := flag.String("ctf-diag", envOr("TTOS_CTF_DIAG_IF", "can1"), "DIAG bus: the contestant side tap, UDS server")
+	ctfDriveIf := flag.String("ctf-drive", envOr("TTOS_CTF_DRIVE_IF", "candrive"), "DRIVE bus: motors, BMS, heartbeat")
+	ctfDiagIf := flag.String("ctf-diag", envOr("TTOS_CTF_DIAG_IF", "candiag"), "DIAG bus: the contestant side tap, UDS server")
 	ctfIdentPath := flag.String("ctf-identity", envOr("TTOS_CTF_IDENTITY", "/etc/ttos/provision.src"), "per-car challenge identity (VIN, serial, Data IDs, codes)")
 	pivotStepsF := flag.Uint("pivot-steps", uint(envInt("TTOS_PIVOT_STEPS", 102)), "steps per wheel for the C1 pivot routine (102 = 45 deg at 0.4411 deg/step)")
 	relayAddrF := flag.String("relay-addr", envOr("TTOS_RELAY_ADDR", ""), "C3 telematics relay listen address (empty = disabled). Bind the AP address only -- 0.0.0.0 exposes the drive bus to the wired network")
@@ -95,7 +95,7 @@ func main() {
 	go statusLoop(*wifiIf, *ethIf, *demo)
 
 	// ---- CTF service layer -------------------------------------------------
-	// Bus ROLE NAMES, not numbers: DRIVE=can0 (motors, BMS), DIAG=can1 (side tap).
+	// Bus ROLE NAMES, not numbers: DRIVE=candrive (motors, BMS), DIAG=candiag (side tap).
 	if *ctfEnable {
 		loadIdentity(*ctfIdentPath)
 
@@ -149,7 +149,7 @@ func main() {
 		// there); see ttos-provision.sh. Override with TTOS_DASH_FACTORY_DRIVE_IF.
 		go factoryDriveWatch(
 			envOr("TTOS_DASH_FACTORY_MARKER", "/etc/ttos/factory"),
-			envOr("TTOS_DASH_FACTORY_DRIVE_IF", "can0"),
+			envOr("TTOS_DASH_FACTORY_DRIVE_IF", "candrive"),
 		)
 	}
 
@@ -258,7 +258,7 @@ func publishFrame(f canbus.Frame) {
 // ctfDiagIface is recorded at startup so frameTier can tell the buses apart by
 // ROLE rather than by number -- the drive bus is the higher-numbered interface on
 // this hardware, and hard-coding "can0 is diag" here would invert the gate.
-var ctfDiagIface = "can1"
+var ctfDiagIface = "candiag"
 
 // logf logs to stderr and to the Debug tab.
 func logf(level, format string, a ...any) {

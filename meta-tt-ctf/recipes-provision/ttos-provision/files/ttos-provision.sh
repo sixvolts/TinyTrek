@@ -91,7 +91,7 @@ EOF
     # exactly that, silently, and cost a long debugging session).
     cur_drive=$(sed -n 's/^TTOS_DASH_DRIVE=//p' "$DASH_DEFAULT" 2>/dev/null | head -n 1)
     if [ -z "$cur_drive" ]; then
-        set_dash_drive "${TTOS_FACTORY_DRIVE_IF:-can0}"
+        set_dash_drive "${TTOS_FACTORY_DRIVE_IF:-candrive}"
     else
         log "factory: leaving existing TTOS_DASH_DRIVE=$cur_drive untouched"
     fi

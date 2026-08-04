@@ -96,13 +96,13 @@ else no "mcp251xfd: no controllers probed (check HAT seating, overlays, SPI)"; f
 # ---------------------------------------------------------------------------
 # Role names, not numbers. The drive harness lands on the CAN0 terminal, and the
 # SPI mapping is fixed by the device-tree overlay, so this holds on every car.
-#   DIAG  can1  CAN FD, 500k/1M  -- 64-byte diagnostic responses, no ISO-TP needed.
+#   DIAG  candiag  CAN FD, 500k/1M  -- 64-byte diagnostic responses, no ISO-TP needed.
 #                                   Only contestant test adapters live here.
-#   DRIVE can0  CLASSIC 2.0, 500k -- every node on it is classic-only (the motor
+#   DRIVE candrive CLASSIC 2.0, 500k -- every node on it is classic-only (the motor
 #                                   nodes are MCP2515, no FD support whatsoever).
-# can0 must NOT report FD: an FD frame is a form error to those nodes and takes the
+# candrive must NOT report FD: an FD frame is a form error to those nodes and takes the
 # drivetrain to bus-off. Keeping FD off means the controller cannot emit one.
-hdr "4. CAN interfaces  (DRIVE=can0 classic 500k; DIAG=can1 FD 500k/1M)"
+hdr "4. CAN interfaces  (DRIVE=candrive classic 500k; DIAG=candiag FD 500k/1M)"
 check_can(){ # $1=iface  $2=expect_fd(0/1)
     ifc=$1; fd=$2
     if ! ip link show "$ifc" >/dev/null 2>&1; then no "$ifc does not exist"; return; fi
@@ -137,8 +137,8 @@ check_can(){ # $1=iface  $2=expect_fd(0/1)
     fi
     [ "$STATE" = "ERROR-ACTIVE" ] && ok "$ifc state ERROR-ACTIVE" || sk "$ifc state = ${STATE:-?} (ERROR-ACTIVE needs a wired, terminated bus)"
 }
-check_can can0 0   # DRIVE: must be CLASSIC -- FD here would bus-off the motor nodes
-check_can can1 1   # DIAG: must be FD -- 64-byte diagnostic responses live here
+check_can candrive 0   # DRIVE: must be CLASSIC -- FD here would bus-off the motor nodes
+check_can candiag 1   # DIAG: must be FD -- 64-byte diagnostic responses live here
 
 # ---------------------------------------------------------------------------
 hdr "5. cangw gateway  (go/no-go: cangw works; shipped DRIVE->DIAG policy is live)"
@@ -155,16 +155,16 @@ if have cangw; then
         # only stayed hidden because the broken exit-status test above bailed out
         # before reaching it. Verify the SHIPPED policy instead of mutating it.
         for gwid in 7D1 7D2; do
-            if echo "$GWL" | grep -q -- "-s can1 -d can0 -f ${gwid}:"; then
-                ok "gateway rule present: DRIVE(can0) -> DIAG(can1) ${gwid}"
+            if echo "$GWL" | grep -q -- "-s candrive -d candiag -f ${gwid}:"; then
+                ok "gateway rule present: DRIVE(candrive) -> DIAG(candiag) ${gwid}"
             else
-                no "gateway rule MISSING: can1 -> can0 ${gwid} (is ttos-cangw.service running?)"
+                no "gateway rule MISSING: DRIVE(candrive) -> DIAG(candiag) ${gwid} (is ttos-cangw.service running?)"
             fi
         done
         # Nothing may be forwarded toward the vehicle bus in the default policy --
         # an inbound rule here would hand contestants the drive bus.
-        if echo "$GWL" | grep -q -- '-s can0 -d can1'; then
-            no "INBOUND rule can0 -> can1 present -- nothing should reach the drive bus"
+        if echo "$GWL" | grep -q -- '-s candiag -d candrive'; then
+            no "INBOUND rule DIAG(candiag) -> DRIVE(candrive) present -- nothing should reach the drive bus"
         else
             ok "no inbound DIAG -> DRIVE forwarding (correct default policy)"
         fi
@@ -203,8 +203,8 @@ else no "cansend/candump missing"; fi
 
 # ---------------------------------------------------------------------------
 if [ "$LOOPBACK" = "1" ]; then
-hdr "6b. HARDWARE CAN loopback  (§7: classic frame on can0, FD frame on can1)"
-info "NOTE: this reconfigures can0/can1 into loopback mode. Reboot to restore."
+hdr "6b. HARDWARE CAN loopback  (§7: classic frame on candrive, FD frame on candiag)"
+info "NOTE: this reconfigures candrive/candiag into loopback mode. Reboot to restore."
 hw_loop(){ # $1=iface $2=fdargs $3=frame
     ifc=$1; fdargs=$2; frame=$3
     $SUDO ip link set "$ifc" down 2>/dev/null
@@ -225,9 +225,9 @@ hw_loop(){ # $1=iface $2=fdargs $3=frame
         esac
     else no "$ifc could not enter loopback mode"; fi
 }
-hw_loop can0 "" "123#DEADBEEF"
-hw_loop can1 "dbitrate 1000000 fd on" "456##1.11223344556677889900AABBCCDDEEFF"
-info "run 'sudo reboot' to restore can0/can1 to their networkd config"
+hw_loop candrive "" "123#DEADBEEF"
+hw_loop candiag "dbitrate 1000000 fd on" "456##1.11223344556677889900AABBCCDDEEFF"
+info "run 'sudo reboot' to restore candrive/candiag to their networkd config"
 fi
 
 # ---------------------------------------------------------------------------

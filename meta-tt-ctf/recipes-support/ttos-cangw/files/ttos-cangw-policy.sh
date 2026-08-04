@@ -2,8 +2,8 @@
 # ttos-cangw-policy -- apply the CTF gateway policy between the two CAN buses.
 #
 # Role names, not numbers (the drive bus is the higher-numbered interface):
-#   DRIVE = can0   motors, BMS, Pi heartbeat.  Contestants only reach this in C3.
-#   DIAG  = can1   the side tap. Contestants live here.
+#   DRIVE = candrive   motors, BMS, Pi heartbeat.  Contestants only reach this in C3.
+#   DIAG  = candiag   the side tap. Contestants live here.
 #
 # Default policy:
 #   DRIVE -> DIAG   flag frames ONLY (0x7D1, 0x7D2)
@@ -19,8 +19,8 @@
 # can drive the motor nodes to bus-off and stop propulsion.
 set -eu
 
-DRIVE_IF="${TTOS_CTF_DRIVE_IF:-can0}"
-DIAG_IF="${TTOS_CTF_DIAG_IF:-can1}"
+DRIVE_IF="${TTOS_CTF_DRIVE_IF:-candrive}"
+DIAG_IF="${TTOS_CTF_DIAG_IF:-candiag}"
 SFF_MASK="7FF"          # match the full standard 11-bit id
 FLAG_IDS="7D1 7D2"      # C2 code, C3 code -- emitted by the BMS on the DRIVE bus
 

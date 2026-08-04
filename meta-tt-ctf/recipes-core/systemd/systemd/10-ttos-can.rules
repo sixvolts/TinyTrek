@@ -1,0 +1,34 @@
+# Name the two MCP2518FD controllers by ROLE, keyed on SPI address.
+#
+# THIS FIXES A CLASS OF BUG THAT COST DAYS.
+#
+# Left alone, the kernel names these can0/can1 in whatever order the two SPI
+# controllers probe, and that order is a RACE. The same car, physically unchanged,
+# came up with the drive harness on can0 one boot and can1 the next. Every symptom
+# looks like a wiring fault: the Pi heartbeats into an empty bus, the motors sit red
+# waiting for it, the diagnostic port reaches a bus with no diagnostic server, and a
+# fleet built identically appears to be "wired differently". It also poisoned the
+# design record -- a bus-role claim was written down as "verified on hardware" from
+# a boot where the names came out the other way, with a note telling future work not
+# to change it.
+#
+# Two things had to be fixed, not one:
+#
+# 1. The .link files this replaces could NEVER have worked. They match on Path=,
+#    which compares udev's ID_PATH, and ID_PATH is EMPTY for SPI-attached CAN
+#    controllers. `networkctl status can0` said "Link File: n/a" on every car. A
+#    match that cannot match fails silently.
+#
+# 2. Renaming to can0/can1 does not work either, because udev cannot swap two
+#    interfaces into each other's names -- the first rename hits a name still in
+#    use, fails, and leaves the racy order in place. ROLE NAMES avoid the collision
+#    entirely: the kernel never assigns "candrive", so there is nothing to swap with.
+#
+# spi0.0 is the HAT's CAN0 terminal and spi1.0 the CAN1 terminal, fixed by the
+# device-tree overlay -- identical on every car, never to be re-derived from a
+# capture again.
+#
+#   candrive  motor + BMS harness (HAT CAN0)   classic CAN 2.0, 500k
+#   candiag   contestant diagnostic port (CAN1) CAN FD, 500k/1M
+SUBSYSTEM=="net", ACTION=="add", DRIVERS=="mcp251xfd", KERNELS=="spi0.0", NAME="candrive"
+SUBSYSTEM=="net", ACTION=="add", DRIVERS=="mcp251xfd", KERNELS=="spi1.0", NAME="candiag"

@@ -6,7 +6,7 @@
 TTOS_DASH_ADDR=192.168.244.1:80
 
 # Comma-separated CAN interfaces to monitor.
-TTOS_DASH_IFACES=can0,can1
+TTOS_DASH_IFACES=candrive,candiag
 
 # Comma-separated CAN interfaces whose RAW FRAMES may be streamed to the UI.
 # EMPTY = none, and that is correct for a competition car: a locked panel showing
@@ -21,7 +21,7 @@ TTOS_DASH_IFACES=can0,can1
 #
 # Emptying this remains an absolute KILL SWITCH: nothing streams regardless of
 # tier. Keep it as the independent second gate, not as the primary one.
-TTOS_DASH_FRAMES=can0,can1
+TTOS_DASH_FRAMES=candrive,candiag
 
 # Interface to SEND control frames on (the drive bus). EMPTY = read-only: the
 # control buttons validate + log but do not transmit.
@@ -110,12 +110,12 @@ TTOS_PIVOT_RPM=75
 # ---- CTF service layer -----------------------------------------------------
 # Bus ROLE NAMES, not numbers. The drive bus is the HIGHER-numbered interface on
 # this hardware -- verified 2026-08-01, and the opposite of the original design doc.
-#   DRIVE = can0   motors, BMS, heartbeat. Contestants only reach it in C3.
-#   DIAG  = can1   the side tap. Contestants live here. Silent until one is plugged
+#   DRIVE = candrive   motors, BMS, heartbeat. Contestants only reach it in C3.
+#   DIAG  = candiag   the side tap. Contestants live here. Silent until one is plugged
 #                  in; transmits fail ENOBUFS until then (a lone node gets no ACK).
 TTOS_CTF_ENABLE=1
-TTOS_CTF_DRIVE_IF=can0
-TTOS_CTF_DIAG_IF=can1
+TTOS_CTF_DRIVE_IF=candrive
+TTOS_CTF_DIAG_IF=candiag
 
 # Per-car challenge identity (VIN, ECU serial, fleet salt, CRC Data IDs, unlock
 # codes), staged here by first-boot provisioning. Mode 600, root-owned. Missing
