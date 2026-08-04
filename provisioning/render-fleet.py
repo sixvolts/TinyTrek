@@ -26,11 +26,39 @@ FLEET_SALT = "dd1b35d820f614e9c94f6a0e4f34cbc3"
 WIFI_COUNTRY = "US"
 TXPOWER_MBM = 500
 
+# Operator SSH key, installed into ttos@car:~/.ssh/authorized_keys on first boot.
+#
+# WHY THIS IS HERE: a fresh card wipes the rootfs, so the key installed on the
+# previous card is gone with it. Every bench script uses `ssh -o BatchMode=yes`
+# (key auth, no prompt), so without this a reflashed car is unreachable to the
+# whole harness until someone hand-copies a key -- eight times, and again after
+# every reimage. ttos-provision has always supported TTOS_SSH_AUTHORIZED_KEY; the
+# generator simply never emitted it.
+#
+# Empty string = omit the line entirely, which is the right default for a car that
+# is going on a competition floor. Set it for bench and staging cars.
+#
+# NOT A SECRET: it is a public key. It does grant console access to whoever holds
+# the matching private key, so do not ship a build machine's key on an event car.
+OPERATOR_SSH_KEY = ""
+
+_KEY_PATH = pathlib.Path.home() / ".ssh" / "id_ed25519.pub"
+if not OPERATOR_SSH_KEY and _KEY_PATH.exists():
+    OPERATOR_SSH_KEY = _KEY_PATH.read_text().strip()
+
 SUBMISSION_FLAGS = {
     "C1": "FLAG[PIVOT_PIVOT_PIVOOOT]",
     "C2": "FLAG[STRAIGHT_OUTTA_GATEWAY]",
     "C3": "FLAG[THE_CALL_IS_COMING_FROM_INSIDE_THE_CAR]",
 }
+
+
+def _ssh_line(r):
+    """The authorized-key line, or a comment saying why there is none."""
+    if not OPERATOR_SSH_KEY:
+        return ("# TTOS_SSH_AUTHORIZED_KEY absent: this car will accept only console-password\n"
+                "# SSH. Bench scripts using BatchMode=yes will NOT be able to reach it.")
+    return f"TTOS_SSH_AUTHORIZED_KEY={OPERATOR_SSH_KEY}"
 
 
 def car_conf(r):
@@ -46,7 +74,7 @@ TTOS_WIFI_COUNTRY={WIFI_COUNTRY}
 TTOS_WIFI_CHANNEL={r['wifi_channel']}
 TTOS_WIFI_TXPOWER_MBM={TXPOWER_MBM}
 TTOS_CONSOLE_PW_HASH={r['console_hash']}
-
+{_ssh_line(r)}
 # --- challenge provisioning ---
 # Not secret: served over the diagnostic bus by design.
 TTOS_VIN={r['vin']}
