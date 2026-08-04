@@ -162,6 +162,24 @@ drive bus could hand the motors a Data ID they already knew and forge freely,
 collapsing Challenge 3 into "get relay access". Re-provisioning means erasing or
 reflashing the node — physical access, deliberately.
 
+**Codes are write-once; detector TUNING is not.** The BMS accepts record type 0x20
+(pivot rpm, pair window, C3 count and window) even when already provisioned, and
+persists it. The whole config handler used to be refused once configured, which
+meant a pivot-rpm retune silently could not reach the node: the burst went out, the
+tool reported success, and the BMS kept the old value. That divergence is not
+cosmetic — C3's discriminator is *same direction AND an rpm the pivot never uses*,
+so a Pi pivoting at 150 against a BMS still believing 75 lets a team replay captured
+pivot frames straight into the C3 code with no forgery at all. Leaving tuning open
+is safe because 0x101 is refused by the relay's SEND path and is not in the C2
+bridge allowlist, so no contestant-reachable path can inject it.
+
+**A node reports what it holds.** The BMS prints a `cfg:` line on its serial port
+every 5 s — configured or not, a fingerprint of the stored codes (not the codes
+themselves; contestants can reach that USB port), and the tuning values. Boards on
+one fleet share codes, so they must share a fingerprint; an odd one out is a board
+to erase. It is periodic rather than printed at boot because these are native-USB
+boards and a reset drops the CDC connection before a monitor can attach.
+
 **Unconfigured is permissive.** A node with nothing stored accepts the unprotected
 6-byte command, because an unprovisioned car must still drive — a hard requirement,
 and a car that will not move until provisioned is useless during setup.
@@ -195,6 +213,18 @@ corpus source is the snapshot DID instead.
 The C2 inbound bridge is *not* a cangw rule — it is Go, because installing kernel
 gateway rules needs `CAP_NET_ADMIN` and `ttos-dashboard` is the one process
 contestants can reach over the network.
+
+**One writer, one bus.** Every frame the Pi puts on the drive bus — heartbeat, node
+config, the C1 pivot, the C2 bridge, the C3 relay and the operator's control pad —
+goes through a single socket. A second, config-gated socket existed for the control
+pad until 2026-08-04; provisioning emptied that config on every competition car, so
+the gate disabled nothing except the operator's own panel, including the e-stop.
+
+**The 12 V rail is part of the sanctioned path.** The stepper drivers are dead
+without it and the BMS boots with it off, so the C1 routine energizes it (`0x115`
+`[0x01]`) *before* commanding the wheels. Nothing else in shipping code did, which
+meant a freshly booted car ran a perfectly valid pivot into unpowered drivers and
+returned the flag anyway — a solve with a motionless robot.
 
 ---
 
@@ -425,7 +455,23 @@ internet), so verification is by sequence.
 
 **Reset:** `sudo ttos-reset` on the car clears every unlock, re-arms the detectors,
 and reloads the gateway. Runnable from the serial console with no laptop, because
-between rounds that is all an operator has.
+between rounds that is all an operator has. **It verifies before it declares.** It
+used to print "This car is LOCKED and ready for the next team" and exit 0
+unconditionally — so a failed gateway reload handed the next team a car that boots,
+serves the panel, answers every diagnostic request and pivots correctly, and can
+never award a code, because `0x7D1`/`0x7D2` no longer have a route to the
+diagnostic bus. It now checks the dashboard, the gateway and the rule count, and
+exits non-zero with the diagnosis if any of them is wrong.
+
+**Stopping a car is electrical.** The motor sketches drain their step buffer on
+`stepsLeft > 0` alone; `heartbeatOK()` drives the status LED and nothing else. Pull
+the Pi, kill the service or cut the bus and the wheels finish what they have — up to
+250 steps, which at an attacker-chosen `rpm=1` is 75 seconds. Do not design anything
+around heartbeat loss halting the wheels; that claim was written into three shipping
+places and was never true. The e-stop therefore drops the 12 V rail **first**, ahead
+of both motor frames, and is best-effort across all three rather than stopping at
+the first transmit error — the error case is a contestant saturating the drive bus
+through the relay, which is exactly when someone reaches for the button.
 
 ---
 
@@ -485,19 +531,47 @@ challenge identity, silently. `render-fleet.py` emits `flash/car-NN/` directorie
 with the file already correctly named so there is nothing to rename while
 flashing.
 
+It also emits `TTOS_SSH_AUTHORIZED_KEY`. A fresh card wipes the rootfs and with it
+any key installed by hand on the previous one, and every bench script uses
+`ssh -o BatchMode=yes` — so without this a reflashed car is unreachable to the whole
+harness until someone copies a key over, eight times, after every reimage. When no
+key is configured the generator writes a comment saying so rather than silently
+omitting the line: an event car should not carry a build machine's key, and that
+needs to be a visible decision rather than an accident.
+
 ---
 
 ## 10. Known gaps
 
-- **No node firmware has run yet.** The BMS challenge build is compile-verified and
-  its rules are validated against a Python model, but no RP2040 has executed them.
+- **Motor stutter unexplained.** Bus contention is ruled out with data measured on
+  the drive controller itself (0.34% load, zero bus errors, command-stream stdev
+  1.5 ms over 160 frames). Prime suspect is the browser-driven keepalive over WiFi,
+  still unmeasured. Note the earlier version of this measurement read its error
+  counters from the wrong interface and reported zeros for a controller it never
+  opened; the numbers above are from the corrected tool.
 - **Pivot at 75 rpm is unconfirmed mechanically.** 250 pps should clear the
-  resonance band; only a real drivetrain can say.
-- **Motor stutter unexplained.** Bus contention is ruled out with data (0.34% load,
-  zero bus errors); the Pi's command stream is metronomic (stdev 1.6 ms). Prime
-  suspect is the browser-driven keepalive over WiFi, unmeasured.
-- **Placards and judge packet not written.** The judge packet still describes
-  per-car values and implies a specific Data ID, when a correct solve recovers a
-  256-member equivalence class.
-- **Two soaks outstanding:** C5 (30 min of legitimate operation → zero flags) and
-  D11 (ENOBUFS tolerance with the DIAG bus down).
+  resonance band; only a real drivetrain can say whether it is smooth.
+- **One team can disarm another car's detectors.** Codes are fleet-wide, PSKs are on
+  placards in the same room, and `/api/flag` needs no prior tier — so a team can
+  paste a code into a neighbouring car's panel and stand its detectors down. The
+  victim then solves C2 correctly and sees nothing. Recoverable with `ttos-reset`,
+  so the cost is a lost round rather than a lost event, and it requires deliberate
+  sabotage. It is the one place one team's action reaches another team's challenge,
+  and it is a consequence of the fleet-wide decision in section 3 rather than a bug.
+- **C1 solves are not in the judging record.** `/api/judge` reports C2 and C3 only,
+  because the record's job is driving the arm mask and C1 has no detector. A C1 solve
+  is in journald but not in the judging path.
+- **Placards and judge packet not written.** The judge packet still describes per-car
+  values and implies a specific Data ID, when a correct solve recovers a 256-member
+  equivalence class — CRC-8 is linear over GF(2), so captures cannot narrow it
+  further and any member of the class produces identical frames.
+- **The remaining six cars are unflashed.** Cars 01 (bench DUT) and 02 are on the
+  current image and firmware.
+
+---
+
+## 11. Walkthrough
+
+`WALKTHROUGH.md` is the operator's solve of all three challenges end to end, with
+the reasoning at each step. It is the fastest way to check that a car is genuinely
+solvable, and it is the reference for what a contestant is expected to do.
