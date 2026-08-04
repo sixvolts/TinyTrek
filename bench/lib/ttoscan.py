@@ -311,7 +311,7 @@ def crc8_j1850(data, init=0xFF):
     Note for challenge work: this CRC is linear over GF(2), so for a FIXED-length
     Data ID, keying it is equivalent to a constant XOR offset on the result. That
     is why capturing more valid frames does not narrow the Data ID search -- one
-    capture leaves 256 candidates and so does three. See CHALLENGE-PLAN.md I.2.
+    capture leaves 256 candidates and so does three. Measured; see WALKTHROUGH.md 3.5.
     """
     crc = init
     for b in data:

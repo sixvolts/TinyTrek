@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
-Render per-car provisioning files and the judge packet FROM fleet-table.csv.
+Render the per-car provisioning files FROM fleet-table.csv.
+
+It used to also emit judge-packet.md. That was dropped 2026-08-04: it had gone stale
+in a way that mattered -- it listed per-car unlock codes after the fleet went uniform,
+and it named an exact Data ID when a correct Challenge 3 solve recovers a 256-member
+equivalence class and cannot identify the true value. The judging path is /api/judge
+on the car, which is car-level and server-side; the CTFd submission flags are the
+SUBMISSION_FLAGS constant below.
 
 This is NOT gen-fleet.py. gen-fleet.py *generates* random values and re-running it
 changes every Data ID, unlock code, PSK and console password -- including ones
@@ -8,8 +15,8 @@ already written into firmware-constants.h and flashed to nodes. This script is
 purely deterministic: it reads the authoritative fleet-table.csv and re-emits the
 derived artifacts byte-for-byte. Safe to run any number of times.
 
-Use it when ttos-provision-carNN.conf or judge-packet.md are missing or need to be
-re-rendered after a template change. Never to mint new values.
+Use it when the per-car provisioning files are missing or need re-rendering after a
+template change. Never to mint new values.
 
 Also note: gen-fleet.py imports `crypt`, removed from the stdlib in Python 3.13
 (PEP 594). It will NOT run on arcana (3.14). This script needs no crypt -- the
@@ -91,43 +98,6 @@ TTOS_CODE_C3={r['code_c3']}
 """
 
 
-def judge_packet(rows):
-    jp = ["# Judge packet -- TinyTrek CTF", "",
-          "Contestants capture a **per-car unlock code** from the vehicle and paste it into",
-          "that car's control panel. The panel validates it and reveals the **static flag**",
-          "to submit to CTFd.", "",
-          "**If a panel is unreachable:** verify the contestant's per-car code below and hand",
-          "out the matching FLAG string directly.", "",
-          "## Static submission flags (CTFd)", ""]
-    for k, v in SUBMISSION_FLAGS.items():
-        jp.append(f"- **{k}**: `{v}`")
-    jp += ["", "## Per-car unlock codes", "",
-           "| Car | Hostname | Ch | C1 | C2 | C3 |", "|---|---|---|---|---|---|"]
-    for r in rows:
-        jp.append(f"| {r['car_id']} | {r['hostname']} | {r['wifi_channel']} | "
-                  f"`{r['code_c1']}` | `{r['code_c2']}` | `{r['code_c3']}` |")
-    jp += ["", "## WiFi (printed on each car's placard)", "",
-           "| Car | SSID | PSK |", "|---|---|---|"]
-    for r in rows:
-        jp.append(f"| {r['car_id']} | `{r['wifi_ssid']}` | `{r['wifi_psk']}` |")
-    jp += ["", "## Vehicle identity (for debugging a car claimed broken)", "",
-           "| Car | VIN | ECU serial | DataID L | DataID R |", "|---|---|---|---|---|"]
-    for r in rows:
-        jp.append(f"| {r['car_id']} | `{r['vin']}` | `{r['ecu_serial']}` | "
-                  f"`{r['dataid_l']}` | `{r['dataid_r']}` |")
-    jp += ["", f"Fleet salt (not secret, ships in client JS): `{FLEET_SALT}`", "",
-           "## Common contestant problems", "",
-           "| Symptom | Cause |",
-           "|---|---|",
-           "| Nothing but errors on the tap | Classic-only adapter on an FD bus. Check the adapter before suspecting the car |",
-           "| No traffic at all | The diagnostic bus is silent by design. They must send a request first |",
-           "| Interface won't come up | FD data bitrate not set. The exact `ip link` line is on the placard |",
-           "| Dashboard won't load | Chrome force-upgrades port 80 to HTTPS. Use Safari or Firefox |",
-           "| Solved but no flag appeared | Station fault, not contestant error. Reset the car |",
-           ""]
-    return "\n".join(jp)
-
-
 def main(outdir):
     here = pathlib.Path(__file__).resolve().parent
     with (here / "fleet-table.csv").open(newline="") as f:
@@ -146,8 +116,7 @@ def main(outdir):
         flash = outdir / "flash" / f"car-{r['car_id']}"
         flash.mkdir(parents=True, exist_ok=True)
         (flash / "ttos-provision.conf").write_text(car_conf(r))
-    (outdir / "judge-packet.md").write_text(judge_packet(rows))
-    print(f"Rendered {len(rows)} car configs + judge-packet.md in {outdir}")
+    print(f"Rendered {len(rows)} car configs in {outdir}")
     print(f"  fleet salt: {FLEET_SALT}  (deterministic -- no values were generated)")
 
 

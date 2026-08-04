@@ -1,6 +1,6 @@
 # TTOS CTF bench rig — as built
 
-Companion to `ttos-ctf-bench-rig.md` (the design brief) and `CHALLENGE-PLAN.md`.
+Companion to `ttos-ctf-bench-rig.md` (the design brief) and `ARCHITECTURE.md`.
 This file records what is actually wired and running on `arcana`, and **where the
 brief is wrong**. Where the two disagree, this file is the one that was measured.
 
@@ -271,7 +271,7 @@ Verified against the live DUT:
   until an explicit `0x115`, matching `TinytrekBMS.ino`.
 
 `crc8_j1850` checks out against the standard vector (`"123456789"` → `0x4B`), and
-the CHALLENGE-PLAN §I.2 result reproduces independently: 1, 2 and 3 captures all
+the equivalence-class result reproduces independently: 1, 2 and 3 captures all
 leave exactly 256 candidate Data IDs.
 
 ### Findings from building it

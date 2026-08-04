@@ -561,10 +561,16 @@ needs to be a visible decision rather than an accident.
 - **C1 solves are not in the judging record.** `/api/judge` reports C2 and C3 only,
   because the record's job is driving the arm mask and C1 has no detector. A C1 solve
   is in journald but not in the judging path.
-- **Placards and judge packet not written.** The judge packet still describes per-car
-  values and implies a specific Data ID, when a correct solve recovers a 256-member
-  equivalence class — CRC-8 is linear over GF(2), so captures cannot narrow it
-  further and any member of the class produces identical frames.
+- **Placards not written.** SSID, PSK, car id, the DIAG bus parameters, "CAN FD
+  required", the panel URL, and "use Safari or Firefox — Chrome force-upgrades
+  port 80".
+- **No judging brief for the event.** `judge-packet.md` was deleted 2026-08-04
+  rather than repaired: it listed per-car unlock codes after the fleet went uniform,
+  and it named an exact Data ID when a correct Challenge 3 solve recovers a
+  256-member equivalence class and cannot identify the true value. The judging
+  mechanism itself is fine and is `/api/judge` on the car (section 7); what does not
+  exist is the printed sheet a judge carries. `WALKTHROUGH.md` section 4 has the
+  substance, including what a correct C3 solve can and cannot be asked to produce.
 - **The remaining six cars are unflashed.** Cars 01 (bench DUT) and 02 are on the
   current image and firmware.
 

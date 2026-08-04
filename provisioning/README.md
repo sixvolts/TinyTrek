@@ -12,7 +12,6 @@ derived from it or generates it. Verified against `firmware-constants.h` and
 | `firmware-constants.h` | **no** | Per-car `TTOS_DATAID_L/_R`, `TTOS_CODE_C2/_C3`, `TTOS_PIVOT_STEPS`. Included by node firmware |
 | `ttos-provision-carNN.conf` ×8 | **no** | Per-car file, for reading and diffing |
 | `flash/car-NN/ttos-provision.conf` ×8 | **no** | **Flash-ready.** Copy this one to the FAT boot partition |
-| `judge-packet.md` | **no** | Codes, static flags, WiFi, identities, troubleshooting |
 | `OPERATOR-SECRETS.md` | **no** | Console passwords, plaintext. Never goes to the floor |
 | `gen-fleet.py` | yes | The generator. **Do not run** — see below |
 | `render-fleet.py` | yes | Deterministic re-render from the CSV. Safe to run |
@@ -51,7 +50,7 @@ Python 3.13 (PEP 594), and this box is on 3.14. If a genuine from-scratch
 regeneration is ever needed, replace `crypt.crypt` with `openssl passwd -6` or
 `passlib`.
 
-To re-render the per-car `.conf` files or the judge packet — after a template
+To re-render the per-car `.conf` files — after a template
 change, or if they go missing — use the deterministic renderer instead:
 
 ```bash

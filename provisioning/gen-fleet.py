@@ -6,7 +6,6 @@ Emits, for an 8-car fleet:
   fleet-table.csv              master table (authoritative)
   ttos-provision-carNN.conf    one provisioning file per car
   firmware-constants.h         per-car Data IDs + unlock codes for node firmware
-  judge-packet.md              codes, flags, identities, troubleshooting
   OPERATOR-SECRETS.md          console passwords in plaintext -- do NOT ship
 
 Regenerating changes ALL values. Run once, commit the output, then treat
@@ -132,38 +131,6 @@ TTOS_CODE_C3={r['code_c3']}
                "#endif", ""]
     (outdir/"firmware-constants.h").write_text("\n".join(fw))
 
-    jp = ["# Judge packet -- TinyTrek CTF", "",
-          "Contestants capture a **per-car unlock code** from the vehicle and paste it into",
-          "that car's control panel. The panel validates it and reveals the **static flag**",
-          "to submit to CTFd.", "",
-          "**If a panel is unreachable:** verify the contestant's per-car code below and hand",
-          "out the matching FLAG string directly.", "",
-          "## Static submission flags (CTFd)", ""]
-    for k,v in SUBMISSION_FLAGS.items():
-        jp.append(f"- **{k}**: `{v}`")
-    jp += ["", "## Per-car unlock codes", "",
-           "| Car | Hostname | Ch | C1 | C2 | C3 |", "|---|---|---|---|---|---|"]
-    for r in rows:
-        jp.append(f"| {r['car_id']} | {r['hostname']} | {r['wifi_channel']} | `{r['code_c1']}` | `{r['code_c2']}` | `{r['code_c3']}` |")
-    jp += ["", "## WiFi (printed on each car's placard)", "",
-           "| Car | SSID | PSK |", "|---|---|---|"]
-    for r in rows:
-        jp.append(f"| {r['car_id']} | `{r['wifi_ssid']}` | `{r['wifi_psk']}` |")
-    jp += ["", "## Vehicle identity (for debugging a car claimed broken)", "",
-           "| Car | VIN | ECU serial | DataID L | DataID R |", "|---|---|---|---|---|"]
-    for r in rows:
-        jp.append(f"| {r['car_id']} | `{r['vin']}` | `{r['ecu_serial']}` | `{r['dataid_l']}` | `{r['dataid_r']}` |")
-    jp += ["", f"Fleet salt (not secret, ships in client JS): `{fleet_salt}`", "",
-           "## Common contestant problems", "",
-           "| Symptom | Cause |",
-           "|---|---|",
-           "| Nothing but errors on the tap | Classic-only adapter on an FD bus. Check the adapter before suspecting the car |",
-           "| No traffic at all | The diagnostic bus is silent by design. They must send a request first |",
-           "| Interface won't come up | FD data bitrate not set. The exact `ip link` line is on the placard |",
-           "| Dashboard won't load | Chrome force-upgrades port 80 to HTTPS. Use Safari or Firefox |",
-           "| Solved but no flag appeared | Station fault, not contestant error. Reset the car |",
-           ""]
-    (outdir/"judge-packet.md").write_text("\n".join(jp))
 
     op = ["# OPERATOR SECRETS -- DO NOT SHIP, DO NOT PRINT FOR THE TABLE", "",
           "Serial console passwords, plaintext. The cars store only the sha512crypt hash.",

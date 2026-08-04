@@ -239,7 +239,7 @@ class BMS:
 class Detectors:
     """C2 and C3, prototyped here before they are compiled into the RP2040.
 
-    Both are gated by the ARM MASK carried in heartbeat byte 1 (CHALLENGE-PLAN
+    Both are gated by the ARM MASK carried in heartbeat byte 1 (ARCHITECTURE.md
     section D). Arming is POSITIVE: bit set = armed. Any failure -- stale
     heartbeat, DLC < 2, no heartbeat at all -- yields mask 0, i.e. DISARMED.
     A dead station is recoverable; a silently leaked flag is not.
@@ -639,7 +639,7 @@ def main():
                         "the transition)")
     p.add_argument("--crc-covers", type=int, choices=(6, 7), default=7,
                    help="bytes covered by crc8: 7 = bytes 0..6 including the nonce "
-                        "(CHALLENGE-PLAN I.3, recommended -- 3 captures pin the CRC "
+                        "(WALKTHROUGH.md 3.5 -- extra captures do NOT narrow the CRC "
                         "model uniquely); 6 = bytes 0..5 as originally specified, "
                         "which leaves only 2 capturable inputs ever and 4 "
                         "indistinguishable CRC models")
