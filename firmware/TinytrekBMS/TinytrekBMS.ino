@@ -103,6 +103,67 @@ static void cfgStore() {
 
 static bool cfgReady() { return haveC2 && haveC3 && haveTuning && pivotRpm > 0; }
 
+// codeSane -- does a stored code look like a code, rather than like wreckage?
+// Eight characters, all from the generator's alphabet (upper alphanumerics).
+static bool codeSane(const char* c) {
+  for (uint8_t i = 0; i < 8; i++) {
+    char ch = c[i];
+    bool okch = (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9');
+    if (!okch) return false;
+  }
+  return true;
+}
+
+// cfgReport prints what this node believes, periodically, on the serial port.
+//
+// WHY IT EXISTS: the stored config lives in flash, NOT on the Pi's SD card, so it
+// survives reflashing the Pi and (depending on the upload path) may survive
+// reflashing this sketch. A board that latched a malformed code under the old
+// chunk-completeness bug therefore stays broken after both -- cfgLoad() sees the
+// magic byte, restores the wreckage, and cfgReady() goes true, so the node refuses
+// all further code config. Until now nothing reported that, and the first symptom
+// would have been a garbage flag frame mid-event.
+//
+// DELIBERATELY PRINTS A FINGERPRINT, NOT THE CODES. This is a USB serial port on a
+// board inside a car that contestants have physical access to. The fingerprint is
+// enough to compare two boards, or to spot obvious wreckage, without disclosing
+// anything. sane=no means: erase this board's config and re-provision it.
+static unsigned long lastCfgReport = 0;
+const unsigned long CFG_REPORT_MS = 5000;
+
+static void cfgReport() {
+  // PERIODIC, NOT ONCE AT BOOT. This is a native-USB board: a reset drops the CDC
+  // connection, so anything setup() prints is gone before a serial monitor can
+  // reattach. The motor sketches learned this the hard way -- their original
+  // one-shot "Failed to initialize CAN BUS." message was never seen by anyone.
+  // Attaching a monitor at ANY time must tell you the current state.
+  if (lastCfgReport != 0 && millis() - lastCfgReport < CFG_REPORT_MS) return;
+  lastCfgReport = millis();
+
+  Serial.print("cfg: ");
+  if (!cfgReady()) {
+    Serial.println("UNCONFIGURED -- waiting for the Pi's 0x101 burst (this is normal on a new board)");
+    return;
+  }
+  uint8_t fp = 0;
+  for (uint8_t i = 0; i < 8; i++) { fp ^= (uint8_t)codeC2[i]; fp = (uint8_t)((fp << 1) | (fp >> 7)); }
+  for (uint8_t i = 0; i < 8; i++) { fp ^= (uint8_t)codeC3[i]; fp = (uint8_t)((fp << 1) | (fp >> 7)); }
+  Serial.print("CONFIGURED  fingerprint=0x");
+  if (fp < 16) Serial.print("0");
+  Serial.print(fp, HEX);
+  Serial.print("  sane=");
+  Serial.print((codeSane(codeC2) && codeSane(codeC3)) ? "yes" : "NO");
+  Serial.print("  pivotRpm="); Serial.print(pivotRpm);
+  Serial.print(" c2win="); Serial.print(c2PairWindowMs);
+  Serial.print(" c3count="); Serial.print(c3Count);
+  Serial.print(" c3win="); Serial.println(c3WindowMs);
+  if (!(codeSane(codeC2) && codeSane(codeC3))) {
+    Serial.println("cfg: *** STORED CODES ARE MALFORMED -- this node will emit garbage flags.");
+    Serial.println("cfg: *** Erase it (double-tap RESET, drag flash_nuke.uf2) and reflash, then");
+    Serial.println("cfg: *** re-run 'sudo ttos-provision-nodes' on the car.");
+  }
+}
+
 uint8_t       armMask = 0;
 unsigned long lastHeartbeatMs = 0;
 bool          haveHeartbeat = false;
@@ -459,6 +520,10 @@ void loop() {
 
   // Drive the status pixel from the current 12V + battery + cutoff state.
   updateLed(vbatMv);
+
+  // And say what this node believes, on the serial port, continuously. Self
+  // throttled to CFG_REPORT_MS.
+  cfgReport();
 }
 
 void powerOn() {
