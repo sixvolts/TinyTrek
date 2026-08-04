@@ -95,19 +95,29 @@ correctly.
 Note the response is 20 bytes. This is the first thing a classic-only adapter fails
 to receive.
 
-**On a raw capture you will see one extra leading byte** — the ISO 15765-2 PCI. The
-service bytes above are what sits *after* it:
+**On a raw capture you will see one extra leading byte.** The service bytes above
+are what sits *after* it:
 
 ```
-7E8  03 7F 22 7F                      single frame, 3 bytes of payload
-7E8  06 50 03 00 32 01 F4             single frame, 6 bytes
-7E8  00 0C 71 01 02 01 31 44 38 ...   CAN FD escape form: 0x00, then length 0x0C
+7E8  03 7F 22 7F                      3 bytes of payload follow
+7E8  06 50 03 00 32 01 F4             6 bytes
+7E8  00 0C 71 01 02 01 31 44 38 ...   CAN FD form: 0x00, then the length 0x0C
 ```
 
-Lengths up to 7 use the classic form (`0x0N`); anything longer uses the FD escape
-form — a `0x00` byte followed by the real length. Every response worth having in this
-system takes the second form, which is the mechanical reason the diagnostic bus is
-CAN FD. Standard tooling parses both.
+Lengths up to 7 put the count in the low nibble (`0x0N`); anything longer uses the
+CAN FD form — a `0x00` byte followed by the real length.
+
+**This is not ISO-TP, and do not go looking for a transport layer.** The car borrows
+ISO 15765-2's *single-frame header encoding* and nothing else, so that stock tooling
+— `python-can-isotp`, CaringCaribou, a commercial tester — decodes these frames
+without modification. There is no segmentation, no flow control, and no consecutive
+frames: the server ignores multi-frame PCIs rather than answering them.
+
+None is needed. CAN FD carries 64 bytes and the largest response in the system is the
+snapshot at 23, so everything fits in one frame. That is the same fact that forces
+the diagnostic bus to be FD in the first place — on classic CAN these responses would
+*require* a segmentation layer, and building one is not a skill this event is
+testing.
 
 ### 1.2 — Find the routines
 
