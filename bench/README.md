@@ -24,8 +24,14 @@ sudo ./bench-up.sh          # bring both buses up, prove the role mapping
 
 | Role | arcana iface | USB port | Config | DUT side |
 |---|---|---|---|---|
-| DRIVE | `ttdrive` | `3-6.4` | classic 500 k | DUT `can0` |
-| DIAG | `ttdiag` | `3-6.3` | FD 500 k / 1 M | DUT `can1` |
+| DRIVE | `ttdrive` | `3-6.3` | classic 500 k | DUT `candrive` |
+| DIAG | `ttdiag` | `3-6.4` | FD 500 k / 1 M | DUT `candiag` |
+| DIAG (car) | `ttcardiag` | `0a:00.3-usb-0:3` | FD 500 k / 1 M | car 02 diagnostic port |
+
+The DUT names its own interfaces by role too, from `10-ttos-can.rules` in the
+image — `candrive` is the HAT's CAN0 terminal (`spi0.0`), `candiag` is CAN1
+(`spi1.0`). Both sides therefore read as roles end to end, and neither depends on
+kernel probe order.
 
 DUT: `192.168.4.133`, user `ttos`, unprovisioned (factory mode, password `ttos`).
 Key auth is installed from `arcana`, so scripts run without a password prompt;
@@ -73,12 +79,21 @@ negative check (T2). T2 alone is unfalsifiable.
 ### 2. Adapters are pinned to role names, not numbers (§1)
 
 A script that says "observe `ttdiag`" cannot be silently backwards, whatever the
-cabling is. That paid for itself on 2026-08-03: the bus roles turned out to be the
-reverse of what the config claimed — DRIVE is the car's `can0`, not `can1` — and
-correcting the whole rig took **two lines in the udev rule and no cable moved**.
+cabling is. That paid for itself on 2026-08-03, when the bus roles turned out to be
+the reverse of what the config claimed — DRIVE is the car's `can0`, not `can1` —
+and correcting the whole rig took two lines and no cable moved.
 
-The DUT keeps its own `can0`/`can1` names; those are baked into shipped `.network`
-files and dashboard config. The two sides never have to agree, which is the point.
+**And then it bit, because the same commit edited these two lines as well.** The
+car-side correction was right; the bench mapping was already right and got
+inverted along with it. For a day, every bench observation was on the wrong wire:
+the DUT looked silent on DRIVE while transmitting normally. Nothing failed loudly,
+because a swapped pair makes negative assertions pass.
+
+The rule that falls out of that: **which arcana USB port is cabled to which DUT
+bus is a physical fact, and a role correction at the far end is never also a
+correction here.** Verify this file against traffic, not against reasoning about
+the other end — which is exactly what `bench-up.sh` does, and it catches this
+inversion in 1.5 s. It simply had not been run in between.
 
 ### 3. Pin by USB port, not adapter serial (§2)
 
@@ -128,8 +143,8 @@ Set `DRIVE_FD=1` only to *capture a stray FD frame's contents*, never to run G3.
 ./push-config.sh             platform files     ~10 s  (--dry-run to preview)
 ```
 
-`push-config.sh` syncs the files a Go rebuild cannot touch — `can0/can1.network`,
-the `.link` files, the AP network file, the `cangw` policy and its unit,
+`push-config.sh` syncs the files a Go rebuild cannot touch — `candrive/candiag.network`,
+the udev naming rule, the AP network file, the `cangw` policy and its unit,
 `ttos-selftest`, `ttos-provision`, `ttos-dashboard.default` and its unit — straight
 from the source tree, then reconfigures the interfaces they describe. It compares
 by sha256 and pushes only what differs.
@@ -140,7 +155,7 @@ by sha256 and pushes only what differs.
 it did nothing. The script takes both links down first — and then verifies against
 the kernel anyway, because `networkctl reconfigure` was measured here NOT to clear
 FD state it did not set (the same trap as `bench-up.sh` on the host side). It falls
-back to an explicit `ip link set can1 up type can bitrate 500000 fd off`.
+back to an explicit `ip link set candrive up type can bitrate 500000 fd off`.
 
 Interestingly, a **reboot** applies the file cleanly — the interface comes up
 classic from the driver default and networkd only ever adds `BitRate`. So the
@@ -180,8 +195,8 @@ The DUT therefore still reports itself unprovisioned and self-test sections 1 an
 not under test here** — flash a real image and run `ttos-provision` properly before
 the fleet is built.
 
-G3 is only meaningful because the DRIVE adapter is classic **and** the DUT's `can1`
-is classic. Both halves matter: an FD-tolerant observer absorbs the frame, and an
+G3 is only meaningful because the DRIVE adapter is classic **and** the DUT's
+`candrive` is classic. Both halves matter: an FD-tolerant observer absorbs the frame, and an
 FD-capable DUT can still emit one.
 
 Watch for two traps when adding cases, both of which bit here on first run:
@@ -191,10 +206,10 @@ bus passes for free, so pair it with a liveness check (`bus_is_live`).
 
 ## Previously-known drift, now closed
 
-The DUT was one image behind (pre-`112e243`): `can1` still `FDMode=yes`, so it could
+The DUT was one image behind (pre-`112e243`): the drive bus still `FDMode=yes`, so it could
 transmit CAN FD onto the drive bus and **G3 could not be closed on it**. Fixed with
 `push-config.sh` on 2026-08-03, verified by `bench-status.sh`, the DUT self-test
-(`can1 is classic CAN 2.0`), and G3 passing. The gateway also survives three
+(`candrive is classic CAN 2.0`), and G3 passing. The gateway also survives three
 consecutive self-test runs at 2 rules, which is the proof the old destructive
 `cangw -F` is gone.
 

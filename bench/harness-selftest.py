@@ -91,7 +91,7 @@ def main():
         except OSError as e:
             print(f"{RED}could not inject on {DRIVE}: {e}{RST}")
             print(f"{YLW}ENOBUFS here means no other node is ACKing on the drive bus.{RST}")
-            print(f"{YLW}Check the DUT is powered, its can1 is up, and the bus is terminated.{RST}")
+            print(f"{YLW}Check the DUT is powered, its candrive is up, and the bus is terminated.{RST}")
             return 2
 
     time.sleep(0.3)

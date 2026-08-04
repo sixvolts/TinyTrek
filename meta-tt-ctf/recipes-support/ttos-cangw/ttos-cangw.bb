@@ -1,6 +1,6 @@
 SUMMARY = "TTOS CTF CAN gateway policy"
-DESCRIPTION = "Applies the in-kernel cangw policy separating the DRIVE bus (can1: \
-motors, BMS, heartbeat) from the DIAG bus (can0: the contestant side tap). Default \
+DESCRIPTION = "Applies the in-kernel cangw policy separating the DRIVE bus (candrive: \
+motors, BMS, heartbeat) from the DIAG bus (candiag: the contestant side tap). Default \
 policy forwards the flag frames 0x7D1/0x7D2 outbound only; nothing is forwarded \
 inbound until a challenge opens the bridge window. Classic frames only -- the DRIVE \
 bus nodes are classic-only MCP2515 and a real FD frame can drive them to bus-off."

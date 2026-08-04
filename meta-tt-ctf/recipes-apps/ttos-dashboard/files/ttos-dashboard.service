@@ -3,7 +3,7 @@ Description=TinyTrek CTF operator console (CAN dashboard)
 After=network.target systemd-networkd.service
 Wants=network.target
 # Order after first-boot provisioning so we read the final drive setting:
-# factory/test mode enables driving (TTOS_DASH_DRIVE=can0); provisioning resets
+# factory/test mode enables driving (TTOS_DASH_DRIVE=candrive); provisioning resets
 # it to read-only. Ordering only (no Requires) -- the console still comes up if
 # provisioning is skipped or fails.
 After=ttos-provision.service

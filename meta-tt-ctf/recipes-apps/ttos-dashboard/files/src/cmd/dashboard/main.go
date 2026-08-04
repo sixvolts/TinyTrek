@@ -140,12 +140,12 @@ func main() {
 		go openDrive(*driveIf)
 	} else {
 		// No explicit drive interface. In factory/test mode driving must work
-		// without provisioning; TTOS_DASH_DRIVE is supposed to be set to can0 by
+		// without provisioning; TTOS_DASH_DRIVE is supposed to be set to candrive by
 		// first-boot provisioning, but if a boot-ordering hiccup left us reading
 		// an empty value we would be stuck read-only until a restart. Self-heal:
 		// watch for the factory marker and bring the internal bus up when it
 		// appears -- no reboot, no reliance on unit ordering.
-		// can0 is the drive bus (motors + BMS live
+		// candrive is the drive bus (motors + BMS live
 		// there); see ttos-provision.sh. Override with TTOS_DASH_FACTORY_DRIVE_IF.
 		go factoryDriveWatch(
 			envOr("TTOS_DASH_FACTORY_MARKER", "/etc/ttos/factory"),
@@ -232,10 +232,10 @@ var frameAllow = map[string]bool{}
 
 // frameTier is the minimum unlock tier for a bus's raw frames.
 //
-//	DIAG  (can1)  tier 1 -- contestants already have a physical tap on this bus,
+//	DIAG  (candiag)  tier 1 -- contestants already have a physical tap on this bus,
 //	                        so showing it after C1 gives away nothing they could
 //	                        not sniff themselves.
-//	DRIVE (can0)  tier 2 -- this is the C2 corpus. Showing it earlier would let a
+//	DRIVE (candrive)  tier 2 -- this is the C2 corpus. Showing it earlier would let a
 //	                        contestant skip the snapshot DID and the whole
 //	                        interact-then-compose shape of C2.
 func frameTier(iface string) int {
@@ -257,7 +257,7 @@ func publishFrame(f canbus.Frame) {
 
 // ctfDiagIface is recorded at startup so frameTier can tell the buses apart by
 // ROLE rather than by number -- the drive bus is the higher-numbered interface on
-// this hardware, and hard-coding "can0 is diag" here would invert the gate.
+// this hardware, and hard-coding a bus number here would invert the gate.
 var ctfDiagIface = "candiag"
 
 // logf logs to stderr and to the Debug tab.

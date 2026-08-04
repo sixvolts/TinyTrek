@@ -5,7 +5,7 @@
 // -- which keeps the Yocto recipe trivial and reproducible.
 //
 // The raw socket is opened with CAN_RAW_FD_FRAMES enabled, so a single reader
-// handles both classic CAN 2.0 frames (can0) and CAN FD frames (can1). read(2)
+// handles both classic CAN 2.0 frames (candrive) and CAN FD frames (candiag). read(2)
 // returns 16 bytes for a classic frame and 72 for an FD frame; we switch on that.
 package canbus
 

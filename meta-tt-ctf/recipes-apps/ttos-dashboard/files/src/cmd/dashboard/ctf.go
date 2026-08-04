@@ -3,10 +3,11 @@ package main
 // CTF service layer: per-car challenge identity, the DRIVE-bus socket the
 // challenge logic owns, and the Pi liveness heartbeat.
 //
-// Bus ROLE NAMES, not numbers -- the drive bus is the higher-numbered interface:
+// Bus ROLE NAMES, not numbers. udev names these from the SPI address in
+// 10-ttos-can.rules, so they never depend on kernel probe order:
 //
-//	DRIVE = can0   motors, BMS, heartbeat. Contestants only reach it in C3.
-//	DIAG  = can1   the side tap. Contestants live here.
+//	DRIVE = candrive   motors, BMS, heartbeat. Contestants only reach it in C3.
+//	DIAG  = candiag    the side tap. Contestants live here.
 //
 // This lives in the dashboard process on purpose. Unlock tiers are read by the UI
 // layer, written by code redemption, and have to reach the heartbeat emitter; one

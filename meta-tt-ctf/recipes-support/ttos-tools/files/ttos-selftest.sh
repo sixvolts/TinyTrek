@@ -5,7 +5,7 @@
 # Run ON THE PI:
 #     sudo sh ttos-selftest.sh            # non-destructive checks only
 #     sudo sh ttos-selftest.sh --loopback # also runs a CAN loopback self-test that
-#                                          # temporarily reconfigures can0/can1
+#                                          # temporarily reconfigures candrive/candiag
 #                                          # (a reboot restores normal config)
 #
 # Exit code 0 = no failures. SKIP means "needs a second machine / manual check".
@@ -17,7 +17,7 @@ PATH="/sbin:/usr/sbin:$PATH"
 export PATH
 
 # Nearly every check here needs root. Run without it and the output is a page of
-# false failures (can0/can1 "missing", wlan0 with no address, no ethernet), which
+# false failures (candrive/candiag "missing", wlan0 with no address, no ethernet), which
 # is far worse than refusing to run: it teaches whoever is holding the car to
 # ignore the tool. Re-exec once under sudo instead -- one password prompt at most,
 # rather than one per privileged command.

@@ -1,6 +1,6 @@
 package main
 
-// UDS-lite diagnostic server on the DIAG bus (can0).
+// UDS-lite diagnostic server on the DIAG bus (candiag).
 //
 // Single-frame only: no ISO-TP multi-frame, no flow control. CAN FD gives a 64-byte
 // payload, which is enough for every response the challenges need -- including a

@@ -64,6 +64,20 @@ def jget(path, jar=None):
         return {}
 
 
+def session_cookie(jar):
+    """(value, httponly) for ttos_session, read from the JAR the client stores.
+
+    Deliberately not the Set-Cookie header: once a client holds a valid session
+    the server stops re-issuing the header, so header-scraping finds nothing and
+    any assertion built on it passes for the wrong reason. The jar is also
+    literally what the browser keeps, which is what P3 is about.
+    """
+    txt = subprocess.run(SSH + [f"cat {jar}"], capture_output=True, text=True).stdout
+    line = next((l for l in txt.splitlines() if "ttos_session" in l), "")
+    # curl's jar marks HttpOnly entries with this filename-style prefix.
+    return (line.split()[-1] if line else ""), line.startswith("#HttpOnly_")
+
+
 def redeem(code, jar):
     return jget_post("/api/flag", f'{{"code":"{code}"}}', jar)
 
@@ -95,7 +109,6 @@ def main():
     ap.add_argument("--car", default="01")
     args = ap.parse_args()
     car = load_car(args.car)
-    other = load_car("02" if args.car != "02" else "03")
 
     print(f"\npanel unlock tiers (P1-P8)   car {car['car_id']}\n")
     A, B = "/tmp/jarA", "/tmp/jarB"
@@ -107,36 +120,68 @@ def main():
           info.get("frames") == [] and info.get("tier", 0) == 0,
           info=f"frames={info.get('frames')} tier={info.get('tier')}")
 
-    # ---- P3: no unlock state in any client-visible cookie value -------------
-    # Inspect the COOKIE JAR, not a Set-Cookie header: once the client holds a
-    # valid session the server stops re-issuing the header, so header-scraping
-    # silently finds nothing and the check passes for the wrong reason. The jar is
-    # also literally what the client stores, which is what the assertion is about.
-    jar_txt = subprocess.run(SSH + [f"cat {A}"], capture_output=True, text=True).stdout
-    line = next((l for l in jar_txt.splitlines() if "ttos_session" in l), "")
-    cookie_val = line.split()[-1] if line else ""
-    httponly = line.startswith("#HttpOnly_")   # curl's jar marks it with this prefix
-    leaky = any(t in cookie_val.lower() for t in ("tier", "c1", "c2", "c3", "unlock", "admin"))
-    check("P3  no unlock state in the cookie value (opaque token, HttpOnly)",
-          bool(cookie_val) and not leaky and httponly,
-          info=f"cookie={cookie_val[:16]}… ({len(cookie_val)} chars), "
-               f"HttpOnly={httponly}")
+    # ---- P3: the cookie is an opaque handle, not a serialisation of state ----
+    #
+    # THE OLD CHECK SCANNED THE TOKEN FOR SUBSTRINGS -- "tier", "c1", "c2", "c3",
+    # "unlock", "admin" -- and failed if it found one. That tests luck, not the
+    # product. The token is 32 random bytes in base64url, so a few percent of
+    # sessions contain "c1", "c2" or "c3" somewhere by chance. It failed exactly
+    # that way on 2026-08-04, on the value ZlmZVlYbekHWzSr7VZwMRr7S8PRkW3ZBc3f_...
+    # -- the "Bc3f" near the end. Nothing was leaking.
+    #
+    # The property worth asserting is that the tier is not in the cookie AT ALL,
+    # and the way to establish that is to change the tier and watch the token not
+    # move. A byte-identical token across a redemption proves the client holds a
+    # handle and the state is server-side. No substring scan can show that, and no
+    # random token can fake it.
+    #
+    # Run on a THROWAWAY session so A and B are undisturbed. C1 is not written to
+    # the car-wide judging record (only C2 and C3 are), so redeeming it here leaves
+    # nothing for J or P7 to trip over.
+    C = "/tmp/jarC"
+    subprocess.run(SSH + [f"rm -f {C}"], capture_output=True)
+    jget("/api/info", jar=C)
+    tok_before, httponly = session_cookie(C)
+    redeem(car["code_c1"], C)
+    tier_c = jget("/api/info", jar=C).get("tier")
+    tok_after, _ = session_cookie(C)
+    structured = any(ch in tok_before for ch in ".=:|{")   # JWT / k=v / JSON shapes
+    check("P3  cookie is an opaque handle: unchanged by a tier change, HttpOnly",
+          bool(tok_before) and httponly and not structured
+          and tok_before == tok_after and tier_c == 1,
+          info=f"token {tok_before[:12]}… ({len(tok_before)} chars) HttpOnly={httponly}; "
+               f"tier 0 -> {tier_c}, token "
+               f"{'unchanged' if tok_before == tok_after else 'CHANGED — state may be client-side'}")
 
-    # ---- P2: each code unlocks exactly its tier; another car's is rejected ---
+    # ---- P2: a valid code unlocks its tier; a wrong one changes nothing ------
+    #
+    # THIS USED TO REDEEM ANOTHER CAR'S C2 CODE and require rejection. That check
+    # is gone because the property is gone: the fleet is deliberately uniform --
+    # every car carries the same C1/C2/C3 codes and the same Data IDs, so that a
+    # team forced onto a different car mid-event keeps its progress and so that
+    # one firmware image serves all eight. Another car's code IS this car's code;
+    # asserting it is refused would fail a correct system.
+    #
+    # The negative that still means something is a well-formed code that is simply
+    # not one of the three. That is what a contestant actually submits when they
+    # get the CRC-8 wrong, and it must not move the tier.
     r1 = redeem(car["code_c1"], A)
     t_after_c1 = jget("/api/info", jar=A).get("tier")
-    r_other = redeem(other["code_c2"], A)
-    t_after_other = jget("/api/info", jar=A).get("tier")
-    check("P2  own C1 code unlocks tier 1; another car's code is rejected",
+    r_bad = redeem("9ZZZZZZZ", A)
+    t_after_bad = jget("/api/info", jar=A).get("tier")
+    check("P2  own C1 code unlocks tier 1; a wrong code is rejected and does not "
+          "disturb the tier already held",
           r1.get("ok") is True and t_after_c1 == 1
-          and r_other.get("ok") is False and t_after_other == 1,
+          and r_bad.get("ok") is False and t_after_bad == 1,
           info=f"C1 -> ok={r1.get('ok')} tier={t_after_c1}; "
-               f"car {other['car_id']}'s C2 -> ok={r_other.get('ok')} tier={t_after_other}")
+               f"9ZZZZZZZ -> ok={r_bad.get('ok')} tier={t_after_bad}")
 
-    # DIAG tab appears at tier 1, DRIVE does not.
+    # DIAG tab appears at tier 1, DRIVE does not. The panel reports REAL interface
+    # names, so this is the role name from 10-ttos-can.rules -- it read ["can0"]
+    # until 2026-08-04, which was both a dead name and the pre-correction role.
     frames1 = jget("/api/info", jar=A).get("frames", [])
     check("P2b tier 1 reveals the DIAG bus tab only",
-          frames1 == ["can0"], info=f"frames={frames1}")
+          frames1 == ["candiag"], info=f"frames={frames1}")
 
     # ---- P4: a second browser session does not inherit ----------------------
     infoB = jget("/api/info", jar=B)

@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 # Bridge both CTF buses. socketcand listens on TCP 29536 by default.
-ExecStart=/usr/bin/socketcand -i can0,can1
+ExecStart=/usr/bin/socketcand -i candrive,candiag
 Restart=on-failure
 RestartSec=5
 

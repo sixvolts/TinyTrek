@@ -2,13 +2,24 @@
 #
 # WHY ROLE NAMES AND NOT can0/can1:
 # A test that says "observe ttdiag" cannot be silently backwards, whatever the
-# cabling happens to be. That mattered more than expected: the roles were assigned
-# here the other way round until 2026-08-03, following a claim that the DUT's can1
-# was the drive bus. It was not -- the drive harness lands on the CAN0 terminal on
-# a real car, and the Pi's config now matches. Only these two lines changed; no
-# cable moved. That is the whole point of naming by role.
+# cabling happens to be.
 #
-# arcana 3-6.3 is wired to the DUT's can1 (DIAG), 3-6.4 to the DUT's can0 (DRIVE).
+# arcana 3-6.3 is wired to the DUT's DRIVE bus (candrive, HAT CAN0 terminal),
+# 3-6.4 to the DUT's DIAG bus (candiag, HAT CAN1).
+#
+# THESE TWO LINES WERE SWAPPED FOR A DAY, 2026-08-03 to 2026-08-04, and the swap
+# was a mistake. It rode along in the commit that corrected the roles ON THE CAR
+# ("DRIVE is can0, DIAG is can1"). That car-side correction was right. But which
+# arcana USB PORT is cabled to which DUT bus is an unrelated physical fact, and it
+# was already correct -- editing it here inverted every bench observation.
+#
+# Measured on 2026-08-04, DUT transmitting a distinct ID on each of its buses:
+#   DUT candrive 7BB -> arrived on arcana 3-6.3        (heartbeat 0x100/0x116 too)
+#   DUT candiag  7CC -> arrived on arcana 3-6.4
+# Restored to the 5be1996 mapping. No cable was moved to fix it, and none should be.
+#
+# The lesson: a bus-role correction on the DUT is never also a correction here.
+# Verify this file against traffic, not against reasoning about the other end.
 #
 # A THIRD adapter goes to a complete vehicle's diagnostic port -- `ttcardiag`. The
 # DUT rig is for unit and functional work with emulated nodes; the car is the only
@@ -37,6 +48,6 @@
 # Install:  sudo cp 99-ttos-bench-can.rules /etc/udev/rules.d/
 #           sudo udevadm control --reload && sudo udevadm trigger -s net
 
-SUBSYSTEM=="net", ACTION=="add", ENV{ID_PATH}=="pci-0000:06:00.3-usb-0:6.3:1.0", NAME="ttdiag"
-SUBSYSTEM=="net", ACTION=="add", ENV{ID_PATH}=="pci-0000:06:00.3-usb-0:6.4:1.0", NAME="ttdrive"
+SUBSYSTEM=="net", ACTION=="add", ENV{ID_PATH}=="pci-0000:06:00.3-usb-0:6.3:1.0", NAME="ttdrive"
+SUBSYSTEM=="net", ACTION=="add", ENV{ID_PATH}=="pci-0000:06:00.3-usb-0:6.4:1.0", NAME="ttdiag"
 SUBSYSTEM=="net", ACTION=="add", ENV{ID_PATH}=="pci-0000:0a:00.3-usb-0:3:1.0", NAME="ttcardiag"

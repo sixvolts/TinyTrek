@@ -53,16 +53,37 @@ echo \"  dashboard \$(systemctl is-active ttos-dashboard)\"
 echo \"  cangw     \$(systemctl is-active ttos-cangw)\"
 echo '  --- gateway rules (DRIVE->DIAG only; nothing inbound) ---'
 S /usr/bin/cangw -L 2>/dev/null | sed 's/^/    /' || true
-echo '  --- drive bus (can1) ---'
-grep -E '^(BitRate|DataBitRate|FDMode)' /etc/systemd/network/can1.network 2>/dev/null | sed 's/^/    /'
+echo '  --- CAN interfaces (role names; see 10-ttos-can.rules) ---'
+ip -br link show candrive 2>/dev/null | sed 's/^/    /' || echo '    candrive MISSING'
+ip -br link show candiag  2>/dev/null | sed 's/^/    /' || echo '    candiag  MISSING'
+for n in candrive candiag; do
+    echo \"    --- \$n.network ---\"
+    grep -E '^(BitRate|DataBitRate|FDMode)' /etc/systemd/network/\$n.network 2>/dev/null \
+        | sed 's/^/      /' || echo '      (no such file)'
+done
 " 2>/dev/null
 
 # ------------------------------------------------------------------ drift -----
 printf "\n${BLD}== source vs DUT ==${RST}\n"
 printf "  repo HEAD %s\n" "$(cd "$REPO" && git log --oneline -1 2>/dev/null)"
 
-src_fd=$(grep -cE '^FDMode=yes' "$REPO/meta-tt-ctf/recipes-core/systemd/systemd/can1.network" 2>/dev/null)
-dut_fd=$($SSH "$DUT_USER@$DUT" "grep -cE '^FDMode=yes' /etc/systemd/network/can1.network 2>/dev/null" 2>/dev/null)
+# The DRIVE bus is candrive.network, addressed BY ROLE. This read can1.network
+# until 2026-08-04, and when the image renamed the interfaces that file stopped
+# existing on the DUT: `grep -c` on a missing file prints 0, the source side
+# printed 0 too, and the check announced "matches source" having read nothing at
+# either end. So establish the file EXISTS before comparing anything -- a drift
+# check that passes when it cannot see the DUT is worse than no check at all.
+DUT_NET=/etc/systemd/network/candrive.network
+if ! $SSH "$DUT_USER@$DUT" "test -f $DUT_NET" 2>/dev/null; then
+    bad "the DUT has no $DUT_NET"
+    warn "It predates the role-named interfaces (10-ttos-can.rules) and is running"
+    warn "an image where bus roles are assigned by SPI probe order, which races."
+    warn "Reflash before trusting any bus-role result from this DUT."
+    printf "\n"; exit 1
+fi
+
+src_fd=$(grep -cE '^FDMode=yes' "$REPO/meta-tt-ctf/recipes-core/systemd/systemd/candrive.network" 2>/dev/null)
+dut_fd=$($SSH "$DUT_USER@$DUT" "grep -cE '^FDMode=yes' $DUT_NET 2>/dev/null" 2>/dev/null)
 # grep -c prints 0 and exits 1 on no match, so `|| echo 0` would append a SECOND
 # zero and the comparison would run on "0\n0". Normalise instead of defaulting.
 src_fd=$(printf '%s' "${src_fd:-0}" | tr -dc '0-9' | head -c1)

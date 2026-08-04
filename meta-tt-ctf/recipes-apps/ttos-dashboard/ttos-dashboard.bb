@@ -1,5 +1,5 @@
 SUMMARY = "TTOS CTF read-only CAN bus dashboard"
-DESCRIPTION = "A dependency-free Go service that streams live CAN frames from can0/can1 \
+DESCRIPTION = "A dependency-free Go service that streams live CAN frames from candrive/candiag \
 to the browser over Server-Sent Events. Foundation for the CTF control panel. Built as \
 a fully static binary (stdlib only, CGO disabled) so the recipe needs no module fetching."
 HOMEPAGE = "local"

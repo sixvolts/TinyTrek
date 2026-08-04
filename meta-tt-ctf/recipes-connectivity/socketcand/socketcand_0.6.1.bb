@@ -39,7 +39,7 @@ EXTRA_OECONF = "--disable-init-script"
 CFLAGS:append = " -DSIOCGSTAMP=0x8906 -fcommon"
 
 # Service shipped but NOT auto-enabled: on a bench build with no CAN HAT it would
-# crash-loop. Enable per deployment (systemctl enable socketcand) once can0/can1 exist.
+# crash-loop. Enable per deployment (systemctl enable socketcand) once candrive/candiag exist.
 SYSTEMD_SERVICE:${PN} = "socketcand.service"
 SYSTEMD_AUTO_ENABLE = "disable"
 

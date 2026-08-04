@@ -18,6 +18,7 @@ timer or the wireless link, neither of which is on this path.
 
 import argparse
 import csv
+import json
 import os
 import statistics
 import subprocess
@@ -52,9 +53,26 @@ def load_car(car_id):
     raise SystemExit(f"car {car_id} not in fleet-table.csv")
 
 
-def can_stats(iface="can1"):
-    """Error and arbitration counters straight from the DUT's controller."""
+def can_stats(iface="candrive"):
+    """Error and arbitration counters straight from the DUT's DRIVE controller.
+
+    THE INTERFACE NAME MATTERS AND HAS BEEN WRONG HERE. This defaulted to "can1"
+    until 2026-08-04. That was wrong twice over: once the bus roles were corrected
+    can1 was the DIAG controller, so question 1 above was answered with counters
+    from the bus it is not about; and after the image moved to role names can1
+    stopped existing entirely. sh() returns stdout only, so `ip`'s "device not
+    found" goes to stderr, `vals` comes back empty, every delta computes as 0, and
+    the report prints a clean bill of health for an interface it never read.
+
+    Hence the raise: no counters is an ERROR, not zero counters. A congestion
+    measurement that cannot see the controller must not be able to exonerate it.
+    """
     out = sh(f"PATH=/sbin:/usr/sbin:$PATH ip -s -d link show {iface}")
+    if not out.strip():
+        raise SystemExit(
+            f"cannot read counters for {iface} on the DUT -- no such interface?\n"
+            f"  ip -br link show {iface}   (role names come from 10-ttos-can.rules;\n"
+            f"  an image predating them names these can0/can1 by SPI probe order)")
     vals = {}
     lines = out.splitlines()
     for i, l in enumerate(lines):
@@ -69,6 +87,10 @@ def can_stats(iface="can1"):
             if len(n) >= 4:
                 vals["tx_packets"], vals["tx_errors"], vals["tx_dropped"] = \
                     int(n[1]), int(n[2]), int(n[3])
+    if "bus_errors" not in vals:
+        raise SystemExit(
+            f"{iface} exists on the DUT but reports no CAN error counters -- is it a\n"
+            f"CAN device, and is it UP? `ip -s -d link show {iface}` returned:\n{out}")
     return vals
 
 
@@ -85,9 +107,26 @@ def main():
           f"{args.seconds:.0f}s @ {args.interval*1000:.0f} ms target\n")
 
     # Unlock tier 3 -- /api/control gates drive commands behind the C3 code.
+    #
+    # CONFIRM IT TOOK. This was fire-and-forget, and when the redemption failed the
+    # driver loop below ran to completion against an endpoint that refused every
+    # request: no drive frames, no error, and a bus-health section that reported a
+    # spotless bus. Redemption can fail for reasons that have nothing to do with the
+    # code -- /api/flag rate-limits by IP, so running this straight after a suite
+    # that submits several codes gets "too many attempts" and tier 0.
     sh("rm -f /tmp/measjar")
     sh(f"curl -s -c /tmp/measjar -b /tmp/measjar -X POST -H 'Content-Type: application/json' "
        f"-d '{{\"code\":\"{car['code_c3']}\"}}' {BASE}/api/flag")
+    tier_txt = sh(f"curl -s -b /tmp/measjar {BASE}/api/info")
+    try:
+        tier = json.loads(tier_txt or "{}").get("tier", 0)
+    except json.JSONDecodeError:
+        tier = 0
+    if tier != 3:
+        print(f"{RED}cannot drive: the C3 redemption left the session at tier {tier}, "
+              f"not 3.{RST}")
+        print("Wait a minute for /api/flag's rate limit to clear and run again.")
+        return 1
 
     before = can_stats()
 
@@ -150,6 +189,33 @@ def main():
         v = delta.get(k, 0)
         mark = f"{RED}" if v else f"{GRN}"
         print(f"   {k:<24} : {mark}{v}{RST}")
+    # A CLEAN BUS WITH NO TRAFFIC PROVES NOTHING, and saying otherwise is the exact
+    # mistake this script exists to avoid. On 2026-08-04 a run that transmitted zero
+    # drive commands -- the session was never raised to tier 3, so /api/control
+    # refused every request -- still printed "CONTENTION RULED OUT" in bold. Zero
+    # frames means zero errors by construction. The verdict is now gated on there
+    # being enough traffic to have stressed anything, and a barren run is a failure
+    # of the measurement rather than a finding about the bus.
+    if total < 10:
+        print(f"   -> {RED}{BOLD}NO VERDICT: only {total} drive frames were transmitted{RST}")
+        print("      A quiet bus cannot exonerate itself. Nothing was measured here.")
+        # Name the likeliest cause rather than making the operator hunt for it.
+        # A PROVISIONED car has TTOS_DASH_DRIVE empty -- ttos-provision sets it that
+        # way on purpose, as the read-only safety gate -- and then /api/control
+        # accepts the request, replies {"ok":true}, logs "drive disabled", and puts
+        # nothing on the wire. There is no signal at the HTTP layer at all.
+        dv = sh("sed -n 's/^TTOS_DASH_DRIVE=//p' /etc/default/ttos-dashboard").strip()
+        if not dv:
+            print(f"      {YLW}TTOS_DASH_DRIVE is EMPTY on this DUT: the dashboard write path")
+            print(f"      is disabled, so /api/control replies ok and sends nothing.{RST}")
+            print("      That is what ttos-provision does to a competition car. To measure,")
+            print("      use a factory-mode DUT, or set TTOS_DASH_DRIVE=candrive and restart")
+            print("      ttos-dashboard on a car you are willing to make drivable.")
+        else:
+            print(f"      TTOS_DASH_DRIVE={dv}, so the write path is live -- the driver loop")
+            print("      itself did not reach /api/control. Check the tier and the AP address.")
+        print()
+        return 1
     verdict = "CONTENTION RULED OUT" if load < 20 and not any(
         delta.get(k, 0) for k in ("bus_errors", "arb_lost", "err_pass", "bus_off")) \
         else "bus shows stress -- investigate"

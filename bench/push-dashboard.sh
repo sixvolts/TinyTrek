@@ -14,7 +14,7 @@
 # which is not.
 #
 # WHAT THIS CANNOT RELOAD, i.e. when you still owe a full image build:
-#   - can0.network / can1.network        bus bitrates and FD mode
+#   - candrive.network / candiag.network  bus bitrates and FD mode
 #   - the cangw policy + its unit        gateway rules
 #   - ttos-provision, ttos-selftest      shell, but shipped by other recipes
 #   - anything kernel, overlay, or layer
