@@ -15,6 +15,7 @@ import (
 	"embed"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -45,7 +46,10 @@ func main() {
 	wifiIf := flag.String("wifi", envOr("TTOS_DASH_WIFI_IF", "wlan0"), "interface for the WiFi indicator")
 	ethIf := flag.String("eth", envOr("TTOS_DASH_ETH_IF", "eth0"), "interface for the Ethernet indicator")
 	demo := flag.Bool("demo", false, "synthesize battery/sensor indicators (arcana mock)")
-	driveIf := flag.String("drive", os.Getenv("TTOS_DASH_DRIVE"), "CAN interface to SEND control frames on (empty = read-only)")
+	// TTOS_DASH_DRIVE is GONE, deliberately. It read as a read-only safety gate and
+	// was not one -- see handleControl. Drive authority is the tier-3 session gate.
+	// Left unread rather than honoured, so a stale value in an old
+	// /etc/default/ttos-dashboard cannot quietly re-disable the control pad.
 	rpmStraight := flag.Uint("rpm", uint(envInt("TTOS_DASH_RPM", 100)), "stepper rpm for straight moves (speed)")
 	rpmTurn := flag.Uint("turnrpm", uint(envInt("TTOS_DASH_TURN_RPM", 50)), "stepper rpm for turns/rotate (slower = gentler)")
 	keepaliveF := flag.Uint("keepalive", uint(envInt("TTOS_DASH_KEEPALIVE_MS", 150)), "hold-to-drive keepalive interval (ms); each keepalive tops up the node's step buffer")
@@ -55,8 +59,11 @@ func main() {
 	battMax := flag.Int("battmax", envInt("TTOS_DASH_BATT_MAX_MV", 12300), "battery millivolts at 100% (resting/open-circuit)")
 	battLoad := flag.Int("battload", envInt("TTOS_DASH_BATT_LOAD_OFFSET_MV", 1000), "mV added to the measured (loaded) reading to estimate resting voltage; ~= the steady droop under the Pi load")
 	framesArg := flag.String("frames", os.Getenv("TTOS_DASH_FRAMES"), "comma-separated CAN interfaces whose raw frames may be streamed to the UI (empty = none; see frameAllow)")
-	// CTF service layer. Role names, not numbers -- the DRIVE bus is the
-	// higher-numbered interface on this hardware (verified 2026-08-01).
+	// CTF service layer. Role names, not numbers: udev names these from the SPI
+	// address (10-ttos-can.rules), so DRIVE is always the HAT's CAN0 terminal
+	// regardless of kernel probe order. An earlier note here claimed the DRIVE bus
+	// was "the higher-numbered interface, verified 2026-08-01"; that was circular
+	// -- the Pi transmits on whatever it is configured to use -- and it was wrong.
 	ctfEnable := flag.Bool("ctf", envInt("TTOS_CTF_ENABLE", 1) != 0, "run the CTF service layer (heartbeat + diagnostic server)")
 	ctfDriveIf := flag.String("ctf-drive", envOr("TTOS_CTF_DRIVE_IF", "candrive"), "DRIVE bus: motors, BMS, heartbeat")
 	ctfDiagIf := flag.String("ctf-diag", envOr("TTOS_CTF_DIAG_IF", "candiag"), "DIAG bus: the contestant side tap, UDS server")
@@ -99,11 +106,9 @@ func main() {
 	if *ctfEnable {
 		loadIdentity(*ctfIdentPath)
 
-		// The CTF layer owns its own DRIVE-bus socket, deliberately independent of
-		// TTOS_DASH_DRIVE. That gate still governs the control pad -- a locked panel
-		// transmits no drive commands -- but the heartbeat and the diagnostic
-		// routines have to work while the panel is locked, because the motor nodes
-		// refuse to move without a heartbeat.
+		// The one DRIVE-bus socket. Everything that writes to the drive bus goes
+		// through it, the control pad included. It must open even while the panel is
+		// locked, because the motor nodes refuse to move without a heartbeat.
 		go openCTFDrive(*ctfDriveIf)
 
 		// Pi liveness beacon (0x100) for the motor nodes' status LEDs. Now
@@ -136,22 +141,11 @@ func main() {
 	} else {
 		logf("warn", "CTF service disabled (TTOS_CTF_ENABLE=0) -- no heartbeat, no diagnostic server")
 	}
-	if *driveIf != "" {
-		go openDrive(*driveIf)
-	} else {
-		// No explicit drive interface. In factory/test mode driving must work
-		// without provisioning; TTOS_DASH_DRIVE is supposed to be set to candrive by
-		// first-boot provisioning, but if a boot-ordering hiccup left us reading
-		// an empty value we would be stuck read-only until a restart. Self-heal:
-		// watch for the factory marker and bring the internal bus up when it
-		// appears -- no reboot, no reliance on unit ordering.
-		// candrive is the drive bus (motors + BMS live
-		// there); see ttos-provision.sh. Override with TTOS_DASH_FACTORY_DRIVE_IF.
-		go factoryDriveWatch(
-			envOr("TTOS_DASH_FACTORY_MARKER", "/etc/ttos/factory"),
-			envOr("TTOS_DASH_FACTORY_DRIVE_IF", "candrive"),
-		)
-	}
+	// No second drive socket and no factory-mode watcher any more: openCTFDrive
+	// above owns the only DRIVE-bus writer, it retries until candrive is up, and it
+	// runs in factory and provisioned mode alike. The old pair existed to work
+	// around TTOS_DASH_DRIVE arriving empty on first boot -- a race that cannot
+	// happen once nothing reads that variable.
 
 	logf("info", "console starting: ifaces=%s", strings.Join(ifaces, ","))
 
@@ -641,77 +635,50 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 			padFrame(idRMotor, ident.DataIDR, rd, steps, rpm))
 	}
 
-	if sendDrive(frames) {
-		logf("cmd", "control: %s -> sent %s", body.Cmd, describe(frames))
-	} else {
-		logf("cmd", "control: %s (drive disabled) -> would send %s", body.Cmd, describe(frames))
+	// ONE WRITER TO THE DRIVE BUS. This used to go through a second, separate
+	// socket gated by TTOS_DASH_DRIVE, which ttos-provision empties on every
+	// competition car as a "read-only safety gate". It was not one. The heartbeat,
+	// node provisioning, the UDS pivot routine, the C2 bridge and the C3 relay all
+	// write to the same bus through ctfSend and were never gated -- so the car was
+	// never read-only, and the only thing the gate disabled was the operator's own
+	// control pad. Including the e-stop below, whose three frames (zero both step
+	// buffers, drop the 12V rail) were silently discarded while this handler still
+	// answered {"ok":true}. A safety control behind a config flag that the shipping
+	// provisioning path turns off is not a safety control.
+	//
+	// Tier 3 is the gate now, checked above and re-checked per request. That is
+	// what ARCHITECTURE.md section 8 describes, and it is the same move already
+	// made for TTOS_DASH_FRAMES when per-session tiers replaced the all-or-nothing
+	// switch.
+	if err := sendDriveFrames(frames); err != nil {
+		logf("error", "control: %s FAILED -- %v (would have sent %s)",
+			body.Cmd, err, describe(frames))
+		w.WriteHeader(http.StatusServiceUnavailable)
+		// Say so. Reporting ok:true for frames that never reached the bus is how a
+		// dead e-stop looked healthy from the panel and passed its own test.
+		writeJSON(w, map[string]any{"ok": false, "cmd": body.Cmd,
+			"msg": "the drive bus did not accept the command: " + err.Error()})
+		return
 	}
+	logf("cmd", "control: %s -> sent %s", body.Cmd, describe(frames))
 	writeJSON(w, map[string]any{"ok": true, "cmd": body.Cmd})
 }
 
-// ---- drive writer (optional; -drive enables sending on a bus) --------------
-
-var drive struct {
-	sync.Mutex
-	conn *canbus.Conn
-}
-
-func openDrive(iface string) {
-	for {
-		c, err := canbus.Open(iface)
-		if err != nil {
-			logf("warn", "drive %s: open failed (%v); retrying in 3s", iface, err)
-			time.Sleep(3 * time.Second)
-			continue
-		}
-		drive.Lock()
-		drive.conn = c
-		drive.Unlock()
-		logf("info", "drive bus %s ready -- control is LIVE", iface)
-		return
-	}
-}
-
-// factoryDriveWatch enables the drive bus when the factory/test marker is
-// present. It self-heals the first-boot race where the dashboard reads an empty
-// TTOS_DASH_DRIVE before provisioning writes it: as soon as the marker exists,
-// the internal bus comes up (openDrive retries until the iface is ready) and
-// control goes LIVE -- no restart needed. On a provisioned car the marker is
-// absent, so this stays a no-op and the console remains read-only by design.
-func factoryDriveWatch(marker, iface string) {
-	for tries := 0; tries < 60; tries++ { // ~5 min window; factory state is set early in boot
-		drive.Lock()
-		open := drive.conn != nil
-		drive.Unlock()
-		if open {
-			return // an explicit path already enabled the bus
-		}
-		if _, err := os.Stat(marker); err == nil {
-			logf("info", "factory/test mode (%s present) -- enabling drive on %s", marker, iface)
-			openDrive(iface) // blocks retrying until the iface opens, then returns LIVE
-			return
-		}
-		time.Sleep(5 * time.Second)
-	}
-}
-
-func sendDrive(frames []canbus.Frame) bool {
-	drive.Lock()
-	c := drive.conn
-	drive.Unlock()
-	if c == nil {
-		return false
-	}
-	// Report write failures instead of swallowing them: a down/absent CAN
-	// interface would otherwise still be logged as "sent", which makes the console
-	// lie about whether a command actually reached the bus.
-	for _, f := range frames {
-		if err := c.Send(f); err != nil {
-			logf("error", "drive TX failed on %X (%v) -- is the CAN interface up?", f.ID, err)
-			return false
+// sendDriveFrames puts a control burst on the DRIVE bus, stopping at the first
+// failure and naming it. Partial bursts are reported rather than smoothed over: a
+// "forward" whose left wheel was written and right wheel was not is a car that
+// turns, and the operator needs to know that happened.
+func sendDriveFrames(frames []canbus.Frame) error {
+	for i, f := range frames {
+		if err := ctfSend(f); err != nil {
+			if errors.Is(err, errNoBus) {
+				return fmt.Errorf("drive bus is not open (frame %d/%d); is the CTF "+
+					"layer enabled and candrive up?", i+1, len(frames))
+			}
+			return fmt.Errorf("TX failed on %03X (frame %d/%d): %w", f.ID, i+1, len(frames), err)
 		}
 	}
-	return true
+	return nil
 }
 
 func describe(frames []canbus.Frame) string {

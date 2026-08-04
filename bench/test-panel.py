@@ -224,6 +224,44 @@ def main():
           "locked" not in stop.lower(),
           info=f"stop -> {stop.strip()[:90] or '(accepted)'}")
 
+    # ---- P6c/P6d: the WIRE, not the reply ------------------------------------
+    #
+    # THIS IS THE GAP THAT HID A DEAD E-STOP. P6b asks only whether /api/control
+    # ACCEPTED the request. On a provisioned car the handler used to answer
+    # {"ok":true} while the frames went nowhere: the control pad wrote through a
+    # second socket gated by TTOS_DASH_DRIVE, which ttos-provision emptied on every
+    # competition car. Motors kept their buffered steps, the 12V rail stayed up,
+    # and the panel showed success. The suite was green over it.
+    #
+    # An HTTP 200 is not propulsion. Watch the DRIVE bus.
+    sys.path.insert(0, os.path.join(HERE, "lib"))
+    from ttoscan import DRIVE, Observer  # noqa: E402
+
+    # A tier-3 session must actually put motor commands on the bus.
+    with Observer(DRIVE) as od:
+        od.drain()
+        curl("/api/control", jar=A, method="POST", data='{"cmd":"forward"}')
+        moved = od.collect(1.2, match=lambda f: f.can_id in (0x111, 0x113))
+    ids_moved = sorted({hex(f.can_id) for f in moved})
+    check("P6c tier-3 'forward' puts BOTH motor commands on the DRIVE bus",
+          {0x111, 0x113} <= {f.can_id for f in moved},
+          info=f"saw {len(moved)} frames {ids_moved} (want 0x111 and 0x113)")
+
+    # And the e-stop must reach the wire from a LOCKED session -- both step buffers
+    # zeroed and the 12V rail dropped. Checking only that it was accepted is what
+    # let this rot.
+    with Observer(DRIVE) as od:
+        od.drain()
+        curl("/api/control", jar=B, method="POST", data='{"cmd":"stop"}')
+        est = od.collect(1.2, match=lambda f: f.can_id in (0x111, 0x113, 0x115))
+    zeroed = {f.can_id for f in est
+              if f.can_id in (0x111, 0x113) and len(f.data) > 4 and f.data[4] == 0x00}
+    power_off = any(f.can_id == 0x115 and f.data[:1] == b"\x02" for f in est)
+    check("P6d e-stop from a LOCKED session reaches the bus (buffers zeroed, 12V cut)",
+          zeroed == {0x111, 0x113} and power_off,
+          info=f"zeroed={sorted(hex(i) for i in zeroed)} (want 0x111+0x113), "
+               f"12V-off frame seen={power_off}")
+
     # ---- P8: post-C3, detectors stand down -----------------------------------
     time.sleep(1.0)
     sys.path.insert(0, os.path.join(HERE, "lib"))

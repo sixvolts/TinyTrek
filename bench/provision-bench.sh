@@ -7,8 +7,8 @@
 # This stages /etc/ttos/provision.src only -- the file the dashboard reads for
 # VIN, ECU serial, fleet salt, Data IDs and the three unlock codes. It does NOT
 # run ttos-provision, deliberately: full provisioning also sets the hostname,
-# switches the AP to WPA2, resets TTOS_DASH_DRIVE to empty (read-only), and
-# replaces the ttos password with the fleet hash -- which would break the factory
+# switches the AP to WPA2, and replaces the ttos password with the fleet hash --
+# which would break the factory
 # password that every bench script feeds to `sudo -S`. The bench wants the
 # identity, not the lockdown.
 #

@@ -23,18 +23,22 @@ TTOS_DASH_IFACES=candrive,candiag
 # tier. Keep it as the independent second gate, not as the primary one.
 TTOS_DASH_FRAMES=candrive,candiag
 
-# Interface to SEND control frames on (the drive bus). EMPTY = read-only: the
-# control buttons validate + log but do not transmit.
+# TTOS_DASH_DRIVE IS RETIRED (2026-08-04) AND IS NO LONGER READ.
 #
-# VERIFIED 2026-08-01: the motors and BMS are on **can1** on this hardware -- the
-# BMS answers with 0x116 telemetry there, and can0 has no nodes (writes fail with
-# ENOBUFS: no ACK). The original design doc said can0 = internal drive bus; the
-# physical wiring says otherwise. Trust the car, not the doc.
+# It named a second, separate socket used only by the control pad, and setting it
+# empty read as "this car is read-only". It never was. The heartbeat, node
+# provisioning, the UDS pivot routine, the C2 bridge and the C3 telematics relay
+# all write to the drive bus through the CTF layer's own socket and were never
+# gated by it -- so the bus was always writable, and emptying this only disabled
+# the operator's own buttons. Provisioning emptied it on every competition car,
+# which meant the e-stop could not zero the step buffers or drop the 12V rail
+# while the panel still reported success.
 #
-# Factory/test mode sets this to can1 ONLY when it is empty, so a deliberate
-# operator change survives reboots. Provisioning resets it to empty (read-only);
-# once provisioned, set it here + `systemctl restart ttos-dashboard` to drive.
-TTOS_DASH_DRIVE=
+# Drive authority is the tier-3 session gate (redeem the Challenge 3 code), which
+# is what ARCHITECTURE.md section 8 has always described. Same change already made
+# for TTOS_DASH_FRAMES when per-session tiers replaced its all-or-nothing switch.
+#
+# The drive interface itself is TTOS_CTF_DRIVE_IF (default candrive).
 
 # Motion tuning. The motor nodes run a consumed step buffer: each command ADDS
 # STEP_CHUNK steps to a buffer (capped at the firmware STEPS_MAX, ~2.5x a chunk =

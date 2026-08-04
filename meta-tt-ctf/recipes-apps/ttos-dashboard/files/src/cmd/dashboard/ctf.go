@@ -182,10 +182,13 @@ func armMask() byte {
 
 // ---- DRIVE-bus socket owned by the CTF layer ------------------------------
 
-// ctfDrive is independent of TTOS_DASH_DRIVE. The control pad's safety gate stays
-// exactly as it was -- a locked panel still transmits no drive commands -- but the
-// heartbeat and (from Phase 2) the diagnostic routines must work on a car whose
-// panel is locked, because the motor nodes refuse to move without a heartbeat.
+// ctfDrive is now the ONLY writer to the DRIVE bus: heartbeat, node config, UDS
+// routines, the C2 bridge, the C3 relay, and (since 2026-08-04) the control pad.
+// It opens unconditionally and retries until candrive is up, because the heartbeat
+// and the diagnostic routines must work on a car whose panel is locked -- the motor
+// nodes refuse to move without a heartbeat. A locked panel still transmits no drive
+// commands, but that is enforced by the tier-3 session gate in handleControl, not
+// by whether this socket exists.
 var ctfDrive struct {
 	sync.Mutex
 	conn *canbus.Conn

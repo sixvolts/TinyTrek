@@ -445,6 +445,21 @@ moment the session lapses.
 Sessions are `crypto/rand` tokens in an `HttpOnly` cookie, server-side tier map,
 10-minute **sliding** idle. In memory, so a service restart clears every unlock.
 
+**Tier 3 is the whole of drive authority — there is no config switch beside it.**
+The dashboard has exactly one writer to the DRIVE bus, shared with the heartbeat,
+node provisioning, the UDS routines, the C2 bridge and the C3 relay. A second,
+config-gated socket for the control pad existed until 2026-08-04 and was removed:
+provisioning emptied `TTOS_DASH_DRIVE` on every competition car, which read as a
+read-only safety gate but gated nothing else on that bus, so the only thing it
+disabled was the operator's own panel — **including the e-stop**, whose frames
+were discarded while the handler still answered `{"ok":true}`.
+
+The e-stop (`stop`) is exempt from the tier gate by design: it must work from a
+locked panel, a lapsed session, or a judge's phone. It closes the C3 bridge, zeroes
+both step buffers and drops the 12 V rail. `/api/control` now reports failure when
+frames do not reach the bus, and `test-panel.py` asserts the **wire** (P6c, P6d),
+not the HTTP status — an HTTP 200 is not propulsion.
+
 `stop` on `/api/control` is **ungated on purpose** — an e-stop behind an unlock is
 not an e-stop.
 

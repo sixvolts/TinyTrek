@@ -10,7 +10,6 @@ SRC="$STATE_DIR/provision.src"          # secrets moved into the rootfs (600 roo
 LOG="$STATE_DIR/provision.log"
 TEMPLATE=/etc/hostapd/hostapd.conf.template
 HOSTAPD_CONF=/etc/hostapd/hostapd.conf
-DASH_DEFAULT=/etc/default/ttos-dashboard
 
 # Candidate locations of the provisioning file on the FAT boot partition.
 FAT_CANDIDATES="/boot/firmware/ttos-provision.conf /boot/ttos-provision.conf"
@@ -27,18 +26,6 @@ fail() {
     # Persistent warning at the login prompt.
     printf '\n*** %s ***\n*** This car is NOT provisioned -- do not use for competition. ***\n\n' "$msg" > /etc/issue 2>/dev/null
     exit 1
-}
-
-# set_dash_drive VALUE -- point the dashboard write path at VALUE (a CAN iface,
-# e.g. can0, or "" for read-only). Rewrites the DRIVE line in place; the rest of
-# the file (operator edits, tuning) is left untouched.
-set_dash_drive() {
-    [ -f "$DASH_DEFAULT" ] || return 0
-    if grep -q '^TTOS_DASH_DRIVE=' "$DASH_DEFAULT"; then
-        sed -i "s|^TTOS_DASH_DRIVE=.*|TTOS_DASH_DRIVE=$1|" "$DASH_DEFAULT"
-    else
-        printf 'TTOS_DASH_DRIVE=%s\n' "$1" >> "$DASH_DEFAULT"
-    fi
 }
 
 # enter_factory_mode -- reached only when NO provisioning file is present (a
@@ -73,28 +60,11 @@ TTOS_WIFI_COUNTRY=US
 TTOS_WIFI_TXPOWER_MBM=500
 EOF
 
-    # Let the operator console drive the car for hardware bring-up.
-    #
-    # can0 is the drive bus: the harness lands on the CAN0 terminal, and the SPI
-    # mapping (spi0.0 -> can0, spi1.0 -> can1) is fixed by the device-tree overlay,
-    # so this is the same on every car.
-    #
-    # An earlier note here claimed can1, "verified 2026-08-01". That verification
-    # was circular: the Pi transmits its heartbeat on whichever interface is
-    # CONFIGURED as the drive bus, and observing it arrive there proves nothing. The
-    # bench has no motor nodes or BMS at all -- they are emulated on whichever wire
-    # the operator chose. The first real vehicle to run this stack settled it: its
-    # BMS beacons 0x116 on can0.
-    #
-    # Only set it when it is UNSET: factory mode runs on every boot, and blindly
-    # rewriting this line would clobber an operator's deliberate choice (it did
-    # exactly that, silently, and cost a long debugging session).
-    cur_drive=$(sed -n 's/^TTOS_DASH_DRIVE=//p' "$DASH_DEFAULT" 2>/dev/null | head -n 1)
-    if [ -z "$cur_drive" ]; then
-        set_dash_drive "${TTOS_FACTORY_DRIVE_IF:-candrive}"
-    else
-        log "factory: leaving existing TTOS_DASH_DRIVE=$cur_drive untouched"
-    fi
+    # Nothing to do here for driving any more. The dashboard has one drive-bus
+    # writer (candrive, opened by the CTF layer) and it comes up in factory and
+    # provisioned mode alike; the control pad is gated by the tier-3 session, not
+    # by config. TTOS_DASH_DRIVE used to be written here and is retired -- see
+    # ttos-dashboard.default for why it was never the safety gate it looked like.
 
     # Console access for hardware testing: a KNOWN login (ttos/ttos), unlocked, so
     # a blank car is reachable on the serial console. This is a TEST credential --
@@ -348,10 +318,13 @@ ssh-keygen -A >/dev/null 2>&1 || fail "ssh-keygen -A failed"
 printf 'TinyTrekOS-CTF \\n \\l\n\n' > /etc/issue 2>/dev/null
 
 # Lock down: undo any prior FACTORY/TEST state. The open hostapd.conf was already
-# overwritten above with the WPA2 config; here we return the dashboard to its
-# read-only safety gate and drop the factory marker so it can't be mistaken for
-# (or reverted to) test mode.
-set_dash_drive ""
+# overwritten above with the WPA2 config; here we drop the factory marker so this
+# car can't be mistaken for (or reverted to) test mode.
+#
+# This used to also empty TTOS_DASH_DRIVE, described as returning the dashboard to
+# a "read-only safety gate". It was not one: every other writer to the drive bus
+# (heartbeat, node config, UDS routines, C2 bridge, C3 relay) ignored it, so the
+# bus stayed writable and the only casualty was the operator's own e-stop.
 rm -f "$STATE_DIR/factory"
 
 # --- Consume: stage into the rootfs, THEN wipe the FAT copy -----------------
