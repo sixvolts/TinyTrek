@@ -28,6 +28,27 @@ sudo ./bench-up.sh          # bring both buses up, prove the role mapping
 | DIAG | `ttdiag` | Pro FD ch.0 (`dev_id 0x0`) | FD 500 k / 1 M | DUT `candiag` |
 | DIAG (car) | `ttcardiag` | PCAN-USB FD, `0a:00.3-usb-0:3` | FD 500 k / 1 M | car 02 diagnostic port |
 
+**The vehicle is normally NOT attached.** Car 02 sat on `ttcardiag` during
+development; it goes to the event. The DUT stays, so the bench remains useful
+remotely — but it is worth being exact about what that does and does not cover.
+
+| Runs against the DUT (emulated nodes) | Needs a real vehicle |
+|---|---|
+| `harness-selftest`, `test-uds`, `test-gateway` | `soak.py` — C5 and D11 |
+| `test-detectors`, `test-challenge`, `test-c3` | anything about real firmware timing |
+| `test-panel` (incl. `--reboot`), `test-relay` | physical motion, real drivetrain |
+| `bench-status`, `push-*`, `measure-drive` | the 12 V rail actually switching |
+
+The DUT proves the **protocol and the logic**. It cannot prove the **firmware**:
+`vehicle-emulator.py` is a Python model of the BMS and motor nodes, and a passing
+detector test says the rules are right, not that the RP2040 implements them. That
+distinction has already mattered twice — the C2 pair-window bug and the dead 12 V
+rail were both found on a real car, and the second was actively masked on the bench
+because `emu-ctl rail on` forces the rail that no product path was setting.
+
+`soak.py` refuses to run without a vehicle rather than failing deeper with a socket
+error, and says which of the two things is missing.
+
 **The DUT rig is one dual-channel PCAN-USB Pro FD** since 2026-08-04, replacing two
 single-channel dongles. That change broke the old port-based pinning outright:
 **both channels share one `ID_PATH`**, because they are one USB interface. A rule

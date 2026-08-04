@@ -249,9 +249,35 @@ def main():
     ap.add_argument("--d11-hours", type=float, default=4)
     args = ap.parse_args()
 
+    # THIS SUITE NEEDS A REAL CAR, and normally there is not one attached.
+    #
+    # The bench DUT runs the challenge logic against EMULATED nodes, which is enough
+    # for every other suite here. It is not enough for these two: C5 asserts that a
+    # real BMS watching thirty minutes of real traffic stays silent, and that is a
+    # statement about firmware on an RP2040, not about a Python model of it.
+    #
+    # Fail here with the reason rather than deeper with a socket error. When the
+    # vehicle is on the event floor rather than the bench, ttcardiag simply does not
+    # exist, and "[Errno 19] No such device" from inside a helper is a worse way to
+    # learn that than this.
+    if not os.path.exists(f"/sys/class/net/{args.iface}"):
+        raise SystemExit(
+            f"\n{RED}{args.iface} does not exist -- no vehicle is attached to this "
+            f"bench.{RST}\n"
+            "  These two soaks are the ones that CANNOT run against the emulator:\n"
+            "  C5 needs a real BMS to stay silent through real traffic, and D11 needs\n"
+            "  a real diagnostic bus to go unpopulated.\n"
+            "  Attach a car's diagnostic port, or run them at the event.\n")
+
     car = load_car(args.car)
     pw = operator_password(args.car)
     log(f"soaking car {args.car} ({car['hostname']}) at {args.host} via {args.iface}")
+
+    # Reachability, before committing 30+ minutes to it.
+    if subprocess.run(["ping", "-c1", "-W2", args.host],
+                      capture_output=True).returncode != 0:
+        raise SystemExit(f"\n{RED}{args.host} does not answer a ping.{RST}\n"
+                         "  The car is powered off, on another network, or at the event.\n")
 
     results = [soak_c5(args, car, args.host, pw)]
     results.append(soak_d11(args, car, args.host, pw))
