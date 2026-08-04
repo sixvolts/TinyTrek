@@ -96,6 +96,7 @@ func main() {
 	}
 
 	go hub.Run()
+	go reapSessions()
 	for _, ifc := range ifaces {
 		go readLoop(ifc)
 	}
@@ -108,7 +109,8 @@ func main() {
 
 		// The one DRIVE-bus socket. Everything that writes to the drive bus goes
 		// through it, the control pad included. It must open even while the panel is
-		// locked, because the motor nodes refuse to move without a heartbeat.
+		// locked: the heartbeat drives the nodes' status LEDs and the BMS arm mask,
+		// and the diagnostic routines have to work on a locked car.
 		go openCTFDrive(*ctfDriveIf)
 
 		// Pi liveness beacon (0x100) for the motor nodes' status LEDs. Now
@@ -185,7 +187,39 @@ func main() {
 	ln := listenRetry(*addr)
 	log.Printf("listening on %s", *addr)
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+
+	// A SECOND LISTENER ON LOOPBACK, so operator-only endpoints have somewhere to
+	// live that contestants on the AP cannot reach. Same mux; handleProvisionNodes
+	// is the one handler that additionally requires the request to arrive here.
+	// Binding a second address is cheap and needs no second port.
+	if _, port, err := net.SplitHostPort(*addr); err == nil {
+		go func() {
+			lo, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", port))
+			if err != nil {
+				logf("warn", "loopback listener unavailable (%v) -- ttos-provision-nodes will not work", err)
+				return
+			}
+			logf("info", "operator endpoints on 127.0.0.1:%s", port)
+			_ = (&http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}).Serve(lo)
+		}()
+	}
+
 	log.Fatal(srv.Serve(ln))
+}
+
+// isLoopback reports whether a request arrived over the loopback listener.
+//
+// Used to keep operator-only endpoints off the AP. TCP source addresses are not
+// spoofable in any way that survives a handshake, so this is a real boundary
+// rather than a hint -- but it is only as good as the bind: never mount an
+// endpoint that relies on it behind a wildcard listener.
+func isLoopback(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // listenRetry keeps trying to bind (e.g. the AP address may not be up at boot).
@@ -241,6 +275,18 @@ func frameTier(iface string) int {
 
 func publishFrame(f canbus.Frame) {
 	if !frameAllow[f.Iface] {
+		return
+	}
+	// NEVER STREAM THE NODE-CONFIG BURST. 0x101 carries both Data IDs and the C2
+	// and C3 codes as plain ASCII (nodecfg.go), and the DRIVE tab unlocks at tier
+	// 2 -- so a team that has solved only C2 could read C3 straight off its own
+	// panel by triggering a re-provision. The relay's raw-drive reader already
+	// drops this ID for exactly the same reason (relay.go); the SSE path, which
+	// unlocks a tier EARLIER, did not.
+	//
+	// Filtered here rather than at the tier gate on purpose: this must hold no
+	// matter which tier the DRIVE bus is bound to, and no matter who is watching.
+	if f.ID == idNodeConfig {
 		return
 	}
 	publishTier(frameTier(f.Iface), struct {
@@ -370,11 +416,29 @@ func recordBattery(f canbus.Frame) {
 	// Beacon form: [v_hi][v_lo][pwr][flags]. Older 2-byte telemetry carries no
 	// rail state, so leave the previous reading alone rather than inventing one.
 	if len(f.Data) >= 3 {
+		railOn := f.Data[2] == 0x01
 		bms.Lock()
-		bms.on = f.Data[2] == 0x01
+		bms.on = railOn
 		bms.lvc = len(f.Data) >= 4 && f.Data[3]&0x01 != 0
 		bms.when, bms.valid = time.Now(), true
 		bms.Unlock()
+
+		// RECONCILE THE COMMANDED STATE WITH THE REPORTED ONE. `power.on` is what we
+		// last asked for; this is what the BMS says is true. They diverge whenever
+		// the BMS drops the rail on its own -- a low-voltage cutoff (which latches
+		// and deliberately waits for a fresh 0x115 [0x01]) or any brownout, since
+		// its setup() powers off.
+		//
+		// Without this the cache stays optimistically true, handleControl skips the
+		// power-on frame it gates on powerOn(), and every subsequent drive command
+		// goes out to unpowered drivers. The only escape was STOP-then-move, which
+		// nobody would guess. The ground truth was already decoded here and already
+		// preferred by the indicator -- it just never reached the decision.
+		if !railOn && powerOn() {
+			logf("warn", "BMS reports the 12V rail OFF while we believed it ON "+
+				"(low-voltage cutoff or BMS reset) -- the next move will re-energize it")
+			setPower(false)
+		}
 	}
 }
 
@@ -587,6 +651,11 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Cmd string `json:"cmd"`
 	}
+	// Cap the body. These handlers are reachable unauthenticated from the AP, and
+	// an unbounded json.Decoder will read as much as a client sends -- a single
+	// large POST is enough to OOM a Pi and take the judging record with it.
+	// 4 KB is orders of magnitude more than any legitimate request here.
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !controlCmds[body.Cmd] {
 		http.Error(w, "bad command", http.StatusBadRequest)
 		return
@@ -611,10 +680,17 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 		// the operator hit stop, which is the one moment that must be absolute.
 		closeBridge()
 		setPower(false)
+		// THE RAIL CUT GOES FIRST. It used to be last, behind both motor frames.
+		// Cutting 12V is the only thing that stops a car whose step buffers are
+		// already full -- the motor sketches drain what they have with no heartbeat
+		// check (see ARCHITECTURE section 8) -- so it is the frame that must not be
+		// the one dropped. Under the load that makes a transmit fail at all, which
+		// is a contestant saturating the drive bus through the C3 relay, it was
+		// precisely the one being dropped.
 		frames = []canbus.Frame{
+			bmsFrame(false),
 			padFrame(idLMotor, ident.DataIDL, 0x00, 0, straightRPM),
 			padFrame(idRMotor, ident.DataIDR, 0x00, 0, straightRPM),
-			bmsFrame(false),
 		}
 	case "coast":
 		// button released: clear the motor buffers so the wheels stop promptly,
@@ -650,9 +726,20 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 	// what ARCHITECTURE.md section 8 describes, and it is the same move already
 	// made for TTOS_DASH_FRAMES when per-session tiers replaced the all-or-nothing
 	// switch.
-	if err := sendDriveFrames(frames); err != nil {
-		logf("error", "control: %s FAILED -- %v (would have sent %s)",
-			body.Cmd, err, describe(frames))
+	// The e-stop is BEST EFFORT ACROSS ALL FRAMES. Every other command stops at the
+	// first failure, because a half-applied move is worse than none. Stopping is the
+	// opposite: each frame independently makes the car safer, so give every one of
+	// them a chance even if an earlier one failed.
+	err := sendDriveFrames(frames, body.Cmd == "stop")
+	if err != nil {
+		// Log the failure WITHOUT the frame bytes. describe() renders the full
+		// 8-byte protected payload including the CRC, and logf publishes at
+		// tierBase -- so an unauthenticated AP client watching the debug stream
+		// could pump out fresh protected pairs by spamming the ungated e-stop,
+		// escaping both the TTOS_DASH_FRAMES kill switch and the tier-2 DRIVE gate
+		// with no CAN adapter at all. The count is the useful part anyway.
+		logf("error", "control: %s FAILED after %d frame(s) -- %v",
+			body.Cmd, len(frames), err)
 		w.WriteHeader(http.StatusServiceUnavailable)
 		// Say so. Reporting ok:true for frames that never reached the bus is how a
 		// dead e-stop looked healthy from the panel and passed its own test.
@@ -660,25 +747,39 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 			"msg": "the drive bus did not accept the command: " + err.Error()})
 		return
 	}
-	logf("cmd", "control: %s -> sent %s", body.Cmd, describe(frames))
+	logf("cmd", "control: %s -> sent %d frame(s)", body.Cmd, len(frames))
 	writeJSON(w, map[string]any{"ok": true, "cmd": body.Cmd})
 }
 
-// sendDriveFrames puts a control burst on the DRIVE bus, stopping at the first
-// failure and naming it. Partial bursts are reported rather than smoothed over: a
-// "forward" whose left wheel was written and right wheel was not is a car that
-// turns, and the operator needs to know that happened.
-func sendDriveFrames(frames []canbus.Frame) error {
+// sendDriveFrames puts a control burst on the DRIVE bus.
+//
+// bestEffort=false stops at the first failure and names it: a "forward" whose left
+// wheel was written and right wheel was not is a car that turns, and the operator
+// needs to know that happened.
+//
+// bestEffort=true attempts every frame regardless, and reports the first error
+// afterwards. Used by the e-stop, where abandoning the burst on frame 1 meant
+// abandoning the 12 V cut -- the only real interlock -- in exactly the situation
+// that produces the error. See the retry note in ctfSendRetry.
+func sendDriveFrames(frames []canbus.Frame, bestEffort bool) error {
+	var firstErr error
 	for i, f := range frames {
-		if err := ctfSend(f); err != nil {
+		if err := ctfSendRetry(f); err != nil {
 			if errors.Is(err, errNoBus) {
-				return fmt.Errorf("drive bus is not open (frame %d/%d); is the CTF "+
+				err = fmt.Errorf("drive bus is not open (frame %d/%d); is the CTF "+
 					"layer enabled and candrive up?", i+1, len(frames))
+			} else {
+				err = fmt.Errorf("TX failed on %03X (frame %d/%d): %w", f.ID, i+1, len(frames), err)
 			}
-			return fmt.Errorf("TX failed on %03X (frame %d/%d): %w", f.ID, i+1, len(frames), err)
+			if !bestEffort {
+				return err
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
-	return nil
+	return firstErr
 }
 
 func describe(frames []canbus.Frame) string {
@@ -788,7 +889,31 @@ func serveEvents(w http.ResponseWriter, r *http.Request) {
 	client := hub.Add()
 	defer hub.Remove(client)
 
-	_, _ = w.Write([]byte(": connected\n\n"))
+	// EVERY WRITE GETS A DEADLINE, or a client that connects and then stops reading
+	// parks this goroutine permanently. Once the socket send buffer and the peer's
+	// receive window fill, w.Write blocks in the kernel; the loop can then never
+	// reach r.Context().Done(), so the deferred hub.Remove never runs and the
+	// connection costs a goroutine, a socket, a 256-slot channel and a Hub entry
+	// that Run iterates on every single publish -- forever. TCP keepalive does not
+	// reap it, and `curl --limit-rate 1` in a loop is a comfortable attack.
+	//
+	// http.Server.WriteTimeout is the usual answer and is wrong here: it is an
+	// absolute deadline from the start of the request, so it would cut every healthy
+	// SSE stream after N seconds. ResponseController sets it per write instead.
+	rc := http.NewResponseController(w)
+	deadlined := func(b []byte) bool {
+		if err := rc.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			return false
+		}
+		if _, err := w.Write(b); err != nil {
+			return false
+		}
+		return true
+	}
+
+	if !deadlined([]byte(": connected\n\n")) {
+		return
+	}
 	flusher.Flush()
 
 	ping := time.NewTicker(15 * time.Second)
@@ -807,12 +932,16 @@ func serveEvents(w http.ResponseWriter, r *http.Request) {
 			if msg.Tier > sessionTier(r) {
 				continue
 			}
-			_, _ = w.Write([]byte("data: "))
-			_, _ = w.Write(msg.Data)
-			_, _ = w.Write([]byte("\n\n"))
+			if !deadlined([]byte("data: ")) || !deadlined(msg.Data) || !deadlined([]byte("\n\n")) {
+				return
+			}
 			flusher.Flush()
 		case <-ping.C:
-			_, _ = w.Write([]byte(": ping\n\n"))
+			// The ping is also the liveness probe: a client that has stopped reading
+			// fails here within the deadline even when no frames are flowing.
+			if !deadlined([]byte(": ping\n\n")) {
+				return
+			}
 			flusher.Flush()
 		}
 	}

@@ -86,8 +86,38 @@ EOF
 }
 
 # --- Idempotency ------------------------------------------------------------
+#
+# Already provisioned: do not re-apply. But SAY SO LOUDLY IF A FILE IS SITTING
+# THERE, and destroy it either way.
+#
+# This used to log one line and exit 0 with the file untouched on the FAT
+# partition. Two consequences, both bad. The operator who dropped a corrected file
+# on an already-provisioned card believes the car took the new values -- nothing on
+# the console, nothing in /etc/issue, and the car boots perfectly with the old
+# ones. And the card keeps the console password hash, the WPA2 PSK, the VIN, the
+# ECU serial, both Data IDs and all three codes in cleartext on a vfat partition
+# that mounts on any laptop in the room. Because codes and Data IDs are fleet-wide,
+# one such card is the answer key for all eight cars.
 if [ -e "$MARKER" ]; then
-    log "already provisioned; nothing to do"
+    STALE=""
+    for f in $FAT_CANDIDATES; do
+        [ -f "$f" ] && STALE="$f" && break
+    done
+    if [ -n "$STALE" ]; then
+        log "ALREADY PROVISIONED, but a provisioning file is present at $STALE -- NOT applied"
+        # Shred it regardless: leaving fleet secrets readable on a removable card
+        # is worse than any inconvenience, and the operator needs to know the car
+        # did not take them.
+        sz=$(wc -c < "$STALE" 2>/dev/null || echo 0)
+        head -c "$sz" /dev/urandom > "$STALE" 2>/dev/null
+        sync; rm -f "$STALE"; sync
+        log "shredded $STALE (it contained fleet secrets in cleartext)"
+        for tty in /dev/console /dev/tty1 /dev/ttyAMA0; do
+            [ -w "$tty" ] && printf '\n\n******************************************************\n*** THIS CAR IS ALREADY PROVISIONED as %s\n*** The provisioning file was NOT applied, and has been shredded.\n*** To re-provision: rm %s, then reboot with the file in place.\n******************************************************\n\n' "$(cat "$STATE_DIR/car-id" 2>/dev/null || echo unknown)" "$MARKER" > "$tty" 2>/dev/null
+        done
+    else
+        log "already provisioned; nothing to do"
+    fi
     exit 0
 fi
 
@@ -240,11 +270,33 @@ done
 printf '%s' "$P_FLEET_SALT" | grep -qiE '^[0-9a-f]{32}$' \
     || fail "TTOS_FLEET_SALT must be 32 hex chars"
 
-# Non-DFS 5 GHz channel guard (US set); warn but do not hard-fail on others.
+# Non-DFS 5 GHz channel guard (US set). HARD FAIL, not a warning.
+#
+# hw_mode=a is hardcoded in the hostapd.conf written below, so this is a 5 GHz-only
+# config. A 2.4 GHz channel produces a file hostapd refuses to start with -- and
+# ttos-ap.service has Restart=always with StartLimitIntervalSec=0, so it retries
+# forever instead of latching failed. The result is a car with no AP, therefore no
+# panel, no judge endpoint and no relay, while provisioning logged "provisioned OK"
+# and exited 0. A warning in a log nobody reads is not a guard; every other required
+# key here fails loud, and this one has the same consequence.
 case " 36 40 44 48 149 153 157 161 " in
     *" $P_CHANNEL "*) : ;;
-    *) log "WARNING: channel $P_CHANNEL is not in the US non-DFS set (36/40/44/48/149/153/157/161)" ;;
+    *) fail "TTOS_WIFI_CHANNEL=$P_CHANNEL is not a US non-DFS 5 GHz channel (36/40/44/48/149/153/157/161). hw_mode=a is fixed, so hostapd would refuse this config and the car would have no AP at all." ;;
 esac
+
+# Country and TX power reach /etc/default/ttos-wifi, which ttos-ap-prestart.sh and
+# ttos-ap-txpower.sh DOT-SOURCE AS ROOT. An unvalidated value is therefore not a
+# bad setting, it is command execution: TTOS_WIFI_TXPOWER_MBM='500 reboot' would be
+# run, not stored. Constrain both to their actual shapes.
+case "$P_COUNTRY" in
+    [A-Z][A-Z]) : ;;
+    *) fail "TTOS_WIFI_COUNTRY must be a two-letter ISO country code (got '$P_COUNTRY')" ;;
+esac
+case "$P_TXPOWER" in
+    ''|*[!0-9]*) fail "TTOS_WIFI_TXPOWER_MBM must be digits only, in mBm (got '$P_TXPOWER')" ;;
+esac
+[ "$P_TXPOWER" -ge 100 ] && [ "$P_TXPOWER" -le 3000 ] \
+    || fail "TTOS_WIFI_TXPOWER_MBM=$P_TXPOWER is outside the sane range 100..3000 mBm (1..30 dBm)"
 
 # --- Apply ------------------------------------------------------------------
 printf '%s\n' "$P_HOSTNAME" > /etc/hostname
@@ -331,7 +383,21 @@ rm -f "$STATE_DIR/factory"
 # Only now that everything validated and applied. A failed run above leaves the
 # FAT file intact so it can be corrected in the field (§5.6).
 if [ "$SRCFILE" != "$SRC" ]; then
-    cp "$SRCFILE" "$SRC"
+    # || fail, like every other step that must not be skipped.
+    #
+    # This cp was unchecked, and the script runs with `set -u` only -- no `set -e`.
+    # A failed copy (full rootfs on first boot, before ttos-growfs has run; an I/O
+    # error; a bad path) fell straight through to the shred and the completion
+    # marker below and then logged "provisioned OK". The car came up with the right
+    # hostname and a working AP, but no VIN, no Data IDs and no codes -- three dead
+    # challenges -- and the ONLY copy of that car's identity had just been
+    # overwritten with random bytes and deleted. ttos-selftest reported the missing
+    # file as a SKIP, so the pre-event gate still called the car ready.
+    cp "$SRCFILE" "$SRC" || fail "cannot stage identity to $SRC (rootfs full?)"
+    # Prove it landed and is non-empty before anything downstream destroys the
+    # source. A partial write is as bad as none: the dashboard would parse a
+    # truncated file and report a subset of fields missing.
+    [ -s "$SRC" ] || fail "staged identity $SRC is missing or empty after copy"
     # 640 root:ttos-secrets, NOT 600 root.
     #
     # ttos-dashboard runs with DynamicUser=yes -- a transient unprivileged user --

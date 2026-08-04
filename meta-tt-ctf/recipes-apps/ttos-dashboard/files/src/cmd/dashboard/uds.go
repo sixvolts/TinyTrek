@@ -520,21 +520,42 @@ func udsPivot(req []byte, sub byte, rid uint16) []byte {
 		return negative(sidRoutineControl, nrcConditionsNotCorrect)
 	}
 
+	// ENERGIZE THE RAIL FIRST, or the routine is a pantomime.
+	//
+	// The stepper drivers are dead without 12V, and the BMS boots with the rail OFF
+	// (TinytrekBMS setup() calls powerOff()) and only energizes on 0x115 [0x01].
+	// Until 2026-08-04 the ONLY emitter of that frame in the whole tree was the
+	// control pad, behind the tier-3 gate -- so on a freshly booted competition car
+	// the C1 routine put two perfectly valid protected frames on the bus, both nodes
+	// buffered their steps and pulsed STEP, and the car did not move. The code came
+	// back regardless, so it read as a solve with a broken robot. Same for C2.
+	//
+	// It looked intermittent because a car test-driven at tier 3 keeps its rail up
+	// until someone presses STOP, and because the bench emulator has an emu-ctl
+	// "rail on" that every test used -- which is why no suite ever caught it.
+	//
+	// Sent unconditionally rather than gated on the commanded-power cache: after a
+	// low-voltage cutoff or a BMS brownout the rail is off and the cache does not
+	// know it, and a redundant 0x115 costs one classic frame.
+	frames := []canbus.Frame{bmsFrame(true)}
+	setPower(true)
+
 	// Opposite directions, same step count, same rpm: the wheels counter-rotate and
 	// the car turns about its own centre.
-	frames := []canbus.Frame{
+	frames = append(frames,
 		protectedMotorFrame(idLMotor, ident.DataIDL, ld, pivotSteps, pivotRPM),
 		protectedMotorFrame(idRMotor, ident.DataIDR, rd, pivotSteps, pivotRPM),
-	}
+	)
 	for _, f := range frames {
-		if err := ctfSend(f); err != nil {
+		if err := ctfSendRetry(f); err != nil {
 			logf("error", "pivot routine: drive bus send failed: %v", err)
 			return negative(sidRoutineControl, nrcConditionsNotCorrect)
 		}
 	}
 	// Record only AFTER both frames are on the wire, so the snapshot can never
-	// advertise a corpus entry that was never transmitted.
-	recordSnapshot(frames[0], frames[1])
+	// advertise a corpus entry that was never transmitted. Indices 1 and 2: frame 0
+	// is now the 12V rail command, and the snapshot corpus is MOTOR frames only.
+	recordSnapshot(frames[1], frames[2])
 	logf("cmd", "pivot routine: dir=%#02x steps=%d rpm=%d -> C1 code returned",
 		req[4], pivotSteps, pivotRPM)
 

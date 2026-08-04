@@ -98,6 +98,33 @@ def pivot_at_100(inj):
         time.sleep(0.08)
 
 
+def pivot_alternating_options(inj):
+    """The C1 routine called repeatedly with ALTERNATING direction options.
+
+    REGRESSION TEST. This is what a team does the moment they find the routine:
+    sweep the option byte from a script and watch the car. Each call is a perfectly
+    legitimate pivot -- opposite directions, the pivot rpm -- so the car must stay
+    silent. It did not.
+
+    The pair window looked at the other wheel's last command whenever it happened,
+    with no notion of which burst it belonged to. Two calls with opposite options
+    line up at the boundary: call 1 ends with R=REV, call 2 opens with L=REV, and
+    inside 250 ms those two read as a same-direction translation. The most obvious
+    thing to do after solving C1 handed out the C2 code.
+
+    The gap is deliberately shorter than c2PairWindowMs (250 ms) -- at a longer gap
+    the bug cannot express itself and the test would pass on the broken firmware.
+    """
+    for i in range(12):
+        if i % 2 == 0:
+            cmd(inj, ID_L, 102, FWD, PIVOT_RPM)
+            cmd(inj, ID_R, 102, REV, PIVOT_RPM)
+        else:
+            cmd(inj, ID_L, 102, REV, PIVOT_RPM)
+            cmd(inj, ID_R, 102, FWD, PIVOT_RPM)
+        time.sleep(0.12)
+
+
 def single_wheel(inj):
     """One wheel only. Never a translation, so never C2."""
     for _ in range(12):
@@ -167,6 +194,8 @@ def main():
          pivot_legit, False, False)
     case("pivot raised to rpm=100 (opposite dir) -> expect SILENCE",
          pivot_at_100, False, False)
+    case("C1 routine swept with ALTERNATING options -> expect SILENCE",
+         pivot_alternating_options, False, False)
     case("single wheel only -> expect SILENCE",
          single_wheel, False, False)
     case("brief same-dir translation -> C2 only",

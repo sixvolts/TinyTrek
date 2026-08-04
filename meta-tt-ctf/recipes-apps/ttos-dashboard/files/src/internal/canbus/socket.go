@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -122,8 +123,36 @@ func Open(iface string) (*Conn, error) {
 	return &Conn{fd: fd, iface: iface}, nil
 }
 
-// Close closes the socket (unblocks a pending ReadFrame).
+// Close closes the socket.
+//
+// IT DOES NOT UNBLOCK A PENDING ReadFrame, and the comment here claimed for a long
+// time that it did. This is a raw fd and a blocking read(2): closing it from
+// another goroutine leaves the reader parked, and the fd NUMBER is immediately
+// available for reuse -- so the next canbus.Open can be handed the same number and
+// the stranded reader starts consuming somebody else's frames. If udsServe wins
+// that race, diagnostic requests vanish with no error anywhere.
+//
+// The socket must therefore be closed by whichever goroutine reads it. To stop a
+// reader you do not own, use SetReadTimeout and signal it; see relayStream.
 func (c *Conn) Close() error { return syscall.Close(c.fd) }
+
+// SetReadTimeout bounds how long ReadFrame will block. A subsequent timeout
+// surfaces as an error satisfying IsTimeout, not as a frame.
+//
+// This exists so a reader can be shut down cooperatively: poll with a short
+// timeout, check whether you have been told to stop, and close the socket
+// yourself on the way out. Zero disables the timeout (block forever).
+func (c *Conn) SetReadTimeout(d time.Duration) error {
+	tv := syscall.NsecToTimeval(d.Nanoseconds())
+	return syscall.SetsockoptTimeval(c.fd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &tv)
+}
+
+// IsTimeout reports whether an error from ReadFrame is the SetReadTimeout expiry
+// rather than a real failure. A timeout means "no frame yet", never "the bus is
+// broken", and callers must not treat it as a reason to tear anything down.
+func IsTimeout(err error) bool {
+	return errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EWOULDBLOCK)
+}
 
 // ReadFrame blocks until a frame arrives.
 func (c *Conn) ReadFrame() (Frame, error) {

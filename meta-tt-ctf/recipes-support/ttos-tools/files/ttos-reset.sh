@@ -32,7 +32,7 @@ printf '  restarting ttos-dashboard ... '
 systemctl restart ttos-dashboard && printf 'ok\n' || { printf 'FAILED\n'; exit 1; }
 
 printf '  reloading gateway policy  ... '
-systemctl restart ttos-cangw && printf 'ok\n' || printf 'WARN (check ttos-cangw)\n'
+systemctl restart ttos-cangw && printf 'ok\n' || printf 'FAILED\n'
 
 # Wait for the console to answer again, so the operator is not told "done" while
 # the car is still coming up.
@@ -43,8 +43,43 @@ while [ "$i" -lt 15 ]; do
 done
 
 RULES=$(cangw -L 2>/dev/null | grep -c '^cangw -A' || true)
-printf '\n  dashboard : %s\n' "$(systemctl is-active ttos-dashboard)"
-printf '  gateway   : %s (%s rules)\n' "$(systemctl is-active ttos-cangw)" "$RULES"
+# `|| true` is REQUIRED on both: systemctl is-active exits non-zero for anything
+# that is not active, and under `set -e` a failing command substitution in an
+# assignment aborts the script. That is not merely untidy -- it exits before the
+# diagnostic block below, so the operator gets a bare non-zero status and none of
+# the explanation of what is wrong or what to do about it. Measured: a masked
+# ttos-cangw exited 3 right here, silently.
+DASH=$(systemctl is-active ttos-dashboard || true)
+GW=$(systemctl is-active ttos-cangw || true)
+printf '\n  dashboard : %s\n' "$DASH"
+printf '  gateway   : %s (%s rules)\n' "$GW" "$RULES"
 printf '  unlocks   : cleared\n'
 printf '  detectors : re-armed\n\n'
+
+# VERIFY BEFORE DECLARING. Every line above used to print unconditionally and the
+# script exited 0 no matter what, so a failed cangw restart produced a car that
+# boots, serves the panel, answers every diagnostic request and pivots correctly --
+# and never awards a code, because ttos-cangw-policy flushes the table before
+# re-applying it, and 0x7D1/0x7D2 then have no route from DRIVE to DIAG. The next
+# team gets a station that is perfect except for the one thing they came for.
+#
+# bench/lib/carreset.py keys its guard on these exact strings, so the bench read
+# the same lie back.
+FAIL=0
+[ "$DASH" = "active" ] || { printf '  XX dashboard is %s, not active\n' "$DASH"; FAIL=1; }
+[ "$GW" = "active" ]   || { printf '  XX gateway is %s, not active\n' "$GW"; FAIL=1; }
+# Two rules: 0x7D1 and 0x7D2, DRIVE->DIAG. Fewer means flag frames cannot reach
+# the contestant's tap, which is indistinguishable from an unsolvable challenge.
+[ "${RULES:-0}" -ge 2 ] 2>/dev/null || {
+    printf '  XX gateway has %s rule(s), expected 2 (0x7D1 and 0x7D2 DRIVE->DIAG)\n' "${RULES:-0}"
+    printf '     Flag frames cannot reach the diagnostic bus. Challenges 2 and 3\n'
+    printf '     will look solvable and award nothing. Check: systemctl status ttos-cangw\n'
+    FAIL=1
+}
+
+if [ "$FAIL" -ne 0 ]; then
+    printf '\n  *** RESET INCOMPLETE -- DO NOT hand this car to the next team. ***\n\n'
+    exit 1
+fi
+
 printf '  This car is LOCKED and ready for the next team.\n\n'

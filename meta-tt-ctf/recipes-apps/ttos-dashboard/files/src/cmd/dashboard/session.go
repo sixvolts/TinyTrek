@@ -42,6 +42,11 @@ const sessionIdle = 10 * time.Minute
 
 const sessionCookie = "ttos_session"
 
+// maxRequestBody caps every JSON body this service will read. The handlers are
+// reachable unauthenticated from the AP and json.Decoder will otherwise read
+// whatever a client sends; a Pi has no memory to spare for that argument.
+const maxRequestBody = 4 << 10
+
 type session struct {
 	tier     int
 	lastSeen time.Time
@@ -63,6 +68,39 @@ func newToken() string {
 		panic("crypto/rand unavailable: " + err.Error())
 	}
 	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// reapSessions deletes sessions that have gone idle past the timeout.
+//
+// The only other delete is in sessionTier, which requires the SAME token to be
+// presented again -- so a token that is never reused is immortal, and every
+// cookieless request mints one. Anything that fetches the panel without keeping
+// cookies (a scanner, a scripted probe, a contestant's curl loop) grows the map
+// forever, and it is 32 bytes of token plus a struct each time.
+//
+// The consequence is not a lost challenge -- an OOM restart is the sanctioned
+// reset and teams keep the codes they redeemed -- but /api/judge's redeemed list
+// and the relay sequence number go with it, silently. ARCHITECTURE section 7 says
+// judges verify by sequence precisely because timestamps cannot be trusted, so
+// losing it with no operator record is the durable harm.
+func reapSessions() {
+	for {
+		time.Sleep(sessionIdle)
+		cut := time.Now().Add(-sessionIdle)
+		sessions.Lock()
+		for tok, s := range sessions.m {
+			if s.lastSeen.Before(cut) {
+				delete(sessions.m, tok)
+			}
+		}
+		n := len(sessions.m)
+		sessions.Unlock()
+		if n > 500 {
+			// Not fatal, but it means something is minting sessions faster than
+			// they idle out, and the operator should know before the OOM.
+			logf("warn", "%d live panel sessions -- unusually high", n)
+		}
+	}
 }
 
 // sessionTier returns the caller's current tier, expiring an idle session first
@@ -190,6 +228,7 @@ func handleFlag(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Code string `json:"code"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, map[string]any{"ok": false, "msg": "bad request"})
 		return
@@ -278,12 +317,29 @@ func handleJudge(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleProvisionNodes pushes the per-node config burst. Operator-initiated, from
-// the car itself -- see ttos-provision-nodes. Deliberately NOT gated behind a
-// challenge tier: it is a setup action, and the secrets it carries are already in
-// this process. It is reachable only on the AP address, like everything else here.
+// the car itself -- see ttos-provision-nodes.
+//
+// LOOPBACK ONLY. It is not gated behind a challenge tier, because it is a setup
+// action rather than a challenge one -- but "reachable on the AP by anyone who can
+// send a POST" was not the right alternative. The burst puts both Data IDs and the
+// C2 and C3 codes on the drive bus as plain ASCII for six seconds, and the DRIVE
+// frame tab unlocks at tier 2, so a team holding only the C2 code could trigger
+// this and read C3 off its own panel. publishFrame now drops 0x101 as well; this
+// is the other half, and either alone would have been enough. Defence in depth is
+// warranted because the consequence is a silently-skipped challenge, which nobody
+// reports as a bug.
+//
+// It also fires on the legitimate operator path, so restricting the trigger
+// matters even with the stream filtered: replacing a node mid-event should not
+// depend on nobody watching.
 func handleProvisionNodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if !isLoopback(r) {
+		logf("warn", "refused /api/provision-nodes from %s -- loopback only", r.RemoteAddr)
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	if err := provisionNodes(); err != nil {

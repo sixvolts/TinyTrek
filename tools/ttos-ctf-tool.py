@@ -42,11 +42,14 @@ capability problem, which is why `probe` checks it first and says so plainly.
 
 import argparse
 import ctypes
+import errno
 import hashlib
 import os
 import platform
+import re
 import socket
 import struct
+import subprocess
 import sys
 import time
 
@@ -166,7 +169,39 @@ class SocketCAN(Transport):
         return Frame(cid & 0x1FFFFFFF, data[:n], fd=False)
 
     def status(self):
-        return 0
+        """Controller error state, as PCAN-style bits, read from the kernel.
+
+        THIS USED TO RETURN A LITERAL 0, with bus_status = 0 beside it -- so the
+        diagnosis in probe() built its bit list from `0 | 0`, the "nothing
+        acknowledged your frames" branch was unreachable on socketcan (the default
+        transport on Linux), and every silent bus fell through to the branch that
+        tells the operator in the strongest possible terms that the wiring is fine
+        and sends them to debug the dashboard instead. The correct diagnosis was
+        sitting in the branch above, permanently dead.
+
+        ip(8) knows the answer; ask it.
+        """
+        try:
+            out = subprocess.run(
+                ["ip", "-details", "-json", "link", "show", self.iface],
+                capture_output=True, text=True, timeout=4).stdout
+            state = ""
+            m = re.search(r'"state"\s*:\s*"([A-Z-]+)"', out)
+            # -json puts the CAN state under linkinfo.info_data.state; the plain
+            # text form says "can state X". Try the text form too -- busybox ip and
+            # older iproute2 do not support -json at all.
+            if m and m.group(1) in ("ERROR-ACTIVE", "ERROR-WARNING", "ERROR-PASSIVE", "BUS-OFF", "STOPPED"):
+                state = m.group(1)
+            if not state:
+                txt = subprocess.run(
+                    ["ip", "-details", "link", "show", self.iface],
+                    capture_output=True, text=True, timeout=4).stdout
+                m = re.search(r"can state ([A-Z-]+)", txt)
+                state = m.group(1) if m else ""
+            return {"ERROR-WARNING": 0x08, "ERROR-PASSIVE": 0x40000,
+                    "BUS-OFF": 0x10}.get(state, 0)
+        except Exception:                                  # noqa: BLE001
+            return 0
 
     bus_status = 0
 
@@ -567,11 +602,21 @@ def cmd_probe(args):
     # takes an isolated controller past 256 and into BUS-OFF. If the bus is still
     # clean after that, the frames genuinely went out and something genuinely
     # acknowledged them.
+    enobufs = 0
     if reply is None:
         for _ in range(50):
             try:
                 tp.send(Frame(ID_PHYS, probe_req.ljust(8, b"\x00")))
-            except OSError:
+            except OSError as e:
+                # DO NOT BREAK. On socketcan, ENOBUFS here is precisely the signal
+                # the burst exists to produce: the queue is not draining because
+                # nothing is acknowledging. Breaking on the first one abandoned the
+                # test AND discarded the evidence, then the conclusion below
+                # announced that the bus was clean.
+                if getattr(e, "errno", None) == errno.ENOBUFS:
+                    enobufs += 1
+                    time.sleep(0.02)
+                    continue
                 break
         time.sleep(0.3)
         while tp.recv(0.05):
@@ -585,6 +630,13 @@ def cmd_probe(args):
     if reply:
         ok(f"the car answered: {reply!r}")
         note("Transmit, receive, bit timing and wiring are all good.")
+    elif enobufs:
+        bad(f"no answer, and {enobufs} of 50 frames could not be queued (ENOBUFS)")
+        note("ENOBUFS on a CAN socket means the transmit queue is not draining, and")
+        note("it does not drain when nothing acknowledges. A CAN frame is only")
+        note("complete once another node acks it, so this adapter is alone on the")
+        note("wire. Check CAN-H/CAN-L are on the diagnostic pair and not swapped,")
+        note("and that the bus is terminated at both ends (120 ohm each end).")
     elif bits:
         bad(f"no answer, and the controller reports {', '.join(bits)}")
         note("Those bits mean NOTHING ACKNOWLEDGED the frame -- a CAN frame is only")

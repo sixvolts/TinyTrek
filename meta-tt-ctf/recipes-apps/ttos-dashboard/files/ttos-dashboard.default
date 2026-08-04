@@ -132,10 +132,14 @@ TTOS_CTF_IDENTITY=/etc/ttos/provision.src
 # it gives a double-blink red, so you can tell "Pi not talking" from "no 12V" by
 # looking at the robot. Must stay well under the firmware's 1s timeout. 0 = off.
 #
-# Transmitted UNCONDITIONALLY by the CTF layer -- it no longer rides the control-pad
-# drive gate. A CTF car needs the heartbeat alive while its panel is locked, or the
-# motor nodes refuse to move and no challenge can run. Byte 1 carries the detector
-# ARM mask (bit0 C2, bit1 C3) that the BMS mirrors; see CHALLENGE-PLAN.md section D.
+# Transmitted UNCONDITIONALLY by the CTF layer. Byte 1 carries the detector ARM
+# mask (bit0 C2, bit1 C3) that the BMS mirrors; see CHALLENGE-PLAN.md section D.
+#
+# IT IS NOT AN INTERLOCK. This line used to say the motor nodes "refuse to move"
+# without it. They do not: the sketches drain their step buffer on `stepsLeft > 0`
+# alone, and heartbeatOK() only drives the status LED. Stopping the car is
+# electrical -- the BMS dropping the 12V rail. Do not design anything around
+# heartbeat loss halting the wheels.
 TTOS_DASH_HEARTBEAT_MS=200
 
 # Battery gauge: the BMS transmits Vbat (mV, uint16 BE, LOADED terminal voltage) on

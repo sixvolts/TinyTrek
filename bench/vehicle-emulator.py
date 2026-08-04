@@ -271,18 +271,40 @@ class Detectors:
         return bool(self.arm_mask & bit)
 
     def on_command(self, motors, which, d, rpm, now):
+        # MIRRORS TinytrekBMS.ino noteCommand() EXACTLY. If you change one, change
+        # the other in the same commit -- this is the model the bench validates
+        # against, so a divergence here means the suite certifies behaviour no car
+        # has. The pair is now computed ONCE and shared by C2 and C3, as in the
+        # firmware; it used to be computed twice from two separate lookups.
+        if d == DIR_STOP:
+            self.c3_hits.clear()          # an explicit stop breaks the run
+            return
+
+        other = motors["R" if which == "L" else "L"]
+        paired, same_dir_pair, gap_ms = False, False, 0.0
+        if other.last_cmd:
+            t_other, d_other, _ = other.last_cmd
+            paired = (now - t_other) <= C2_PAIR_WINDOW_S
+            same_dir_pair = paired and d_other == d
+            gap_ms = (now - t_other) * 1000
+
+        # A PAIR IS CONSUMED ONCE EVALUATED, so a pair must be formed from two
+        # FRESH commands. Without this the partner timestamp stays live and pairs
+        # again with whatever comes next: two C1 pivot calls with opposite option
+        # bytes inside the window line up at the boundary (first call's R and second
+        # call's L share a direction) and fire C2 at a team that has only solved C1.
+        if paired:
+            motors["L"].last_cmd = None
+            motors["R"].last_cmd = None
+
         # ---- C2: both motors commanded in the SAME dir within a short window.
         # No legitimate interface commands translation while the panel is locked;
         # the pivot always drives the two wheels in OPPOSITE directions.
-        if self.armed(ARM_C2) and d != DIR_STOP:
-            other = motors["R" if which == "L" else "L"]
-            if other.last_cmd:
-                t_other, d_other, _ = other.last_cmd
-                if d_other == d and (now - t_other) <= C2_PAIR_WINDOW_S:
-                    if now > self.c2_until:
-                        log(f"DETECT C2: both motors dir={d:#04x} within "
-                            f"{(now - t_other) * 1000:.0f} ms -> 0x7D1")
-                    self.c2_until = now + C2_HOLD_S
+        if self.armed(ARM_C2) and same_dir_pair:
+            if now > self.c2_until:
+                log(f"DETECT C2: both motors dir={d:#04x} within "
+                    f"{gap_ms:.0f} ms -> 0x7D1")
+            self.c2_until = now + C2_HOLD_S
 
         # ---- C3: sustained SAME-DIR commanding at an rpm that never appears in
         # legitimate locked traffic. C2's composed-replay technique CANNOT reach
@@ -295,24 +317,23 @@ class Detectors:
         # pressure to raise it, see the resonance note in ttos-dashboard.default --
         # an rpm-only rule fires 0x7D2 on the car's OWN legitimate pivot routine and
         # leaks the C3 code to anyone sniffing, before the challenge is even attempted.
-        if self.armed(ARM_C3):
-            same_dir_pair = False
-            if d != DIR_STOP:
-                other = motors["R" if which == "L" else "L"]
-                if other.last_cmd:
-                    t_other, d_other, _ = other.last_cmd
-                    same_dir_pair = (d_other == d
-                                     and (now - t_other) <= C2_PAIR_WINDOW_S)
+        # ONLY EVALUATED PAIRS COUNT, and only they can break the run. The first
+        # command of a pair is not yet evidence of anything -- it has no partner to
+        # be same-direction WITH. Letting it reach the else branch below clears the
+        # run on every other command, and since a pair now consumes both timestamps,
+        # every second command is a first-of-pair: the hit count would never exceed
+        # one and C3 could never fire at all.
+        if self.armed(ARM_C3) and paired:
             if same_dir_pair and rpm != PIVOT_RPM:
                 self.c3_hits.append(now)
                 self.c3_hits = [t for t in self.c3_hits if now - t <= C3_WINDOW_S]
                 if len(self.c3_hits) >= C3_COUNT:
                     if now > self.c3_until:
-                        log(f"DETECT C3: {len(self.c3_hits)} qualifying commands at "
+                        log(f"DETECT C3: {len(self.c3_hits)} qualifying pairs at "
                             f"rpm={rpm} (pivot is {PIVOT_RPM}) in {C3_WINDOW_S:.0f} s -> 0x7D2")
                     self.c3_until = now + C2_HOLD_S
             else:
-                # "CONSECUTIVE" -- any non-qualifying drive command breaks the run.
+                # "CONSECUTIVE" -- a pair that does not qualify breaks the run.
                 self.c3_hits.clear()
 
     def due(self, now):

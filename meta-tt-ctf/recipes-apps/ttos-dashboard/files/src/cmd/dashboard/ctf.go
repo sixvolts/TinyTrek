@@ -15,10 +15,13 @@ package main
 // service" then clears challenge state for free.
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"ttos.local/dashboard/internal/canbus"
@@ -185,10 +188,18 @@ func armMask() byte {
 // ctfDrive is now the ONLY writer to the DRIVE bus: heartbeat, node config, UDS
 // routines, the C2 bridge, the C3 relay, and (since 2026-08-04) the control pad.
 // It opens unconditionally and retries until candrive is up, because the heartbeat
-// and the diagnostic routines must work on a car whose panel is locked -- the motor
-// nodes refuse to move without a heartbeat. A locked panel still transmits no drive
-// commands, but that is enforced by the tier-3 session gate in handleControl, not
-// by whether this socket exists.
+// and the diagnostic routines must work on a car whose panel is locked. A locked
+// panel still transmits no drive commands, but that is enforced by the tier-3
+// session gate in handleControl, not by whether this socket exists.
+//
+// NOT because "the nodes refuse to move without a heartbeat" -- that claim was
+// carried here, in main.go and in ttos-dashboard.default, and it is FALSE. The
+// motor sketches gate the step-drain block on `stepsLeft > 0` alone; heartbeatOK()
+// feeds the status LED and nothing else. Pull the Pi mid-move and the wheels finish
+// the buffer, which at an attacker-chosen rpm=1 is 250 steps over 75 seconds. What
+// actually stops the car is electrical -- the BMS dropping the 12V rail -- which is
+// why the e-stop sends that frame FIRST. bench/README.md recorded this and the
+// claims outlived the correction; do not reintroduce them.
 var ctfDrive struct {
 	sync.Mutex
 	conn *canbus.Conn
@@ -222,6 +233,37 @@ func ctfSend(f canbus.Frame) error {
 	}
 	f.FD = false
 	return c.Send(f)
+}
+
+// ctfSendRetry is ctfSend with a bounded ENOBUFS retry.
+//
+// The drive bus is 500 kbit and the interface transmit queue is ten frames deep,
+// so a client writing as fast as TCP will carry it overruns the queue in
+// milliseconds -- measured on this hardware at 80 frames issued in ~0 ms, 29
+// rejected. relaySend has had this since C3 was built, which left the CONTESTANT's
+// path hardened against bus saturation and the OPERATOR's path not: the operator
+// only ever reaches for the controls during the saturation a contestant is
+// causing, which is the one moment the raw send fails.
+//
+// Same bound as relaySend, and for the same reason: unbounded would let a genuinely
+// dead bus wedge the caller, and "dead bus" is a state this project has been in
+// more than once. After the bound, report rather than pretend.
+func ctfSendRetry(f canbus.Frame) error {
+	const (
+		retryEvery = 2 * time.Millisecond
+		retryFor   = 50 * time.Millisecond
+	)
+	deadline := time.Now().Add(retryFor)
+	for {
+		err := ctfSend(f)
+		if err == nil || !errors.Is(err, syscall.ENOBUFS) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("bus busy: %w (the drive bus is not draining)", err)
+		}
+		time.Sleep(retryEvery)
+	}
 }
 
 // ---- heartbeat ------------------------------------------------------------

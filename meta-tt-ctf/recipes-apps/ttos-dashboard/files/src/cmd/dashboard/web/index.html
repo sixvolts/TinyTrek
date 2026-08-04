@@ -120,6 +120,11 @@
     aspect-ratio:1;height:100%;justify-self:center;
     clip-path:polygon(29.3% 0,70.7% 0,100% 29.3%,100% 70.7%,70.7% 100%,29.3% 100%,0 70.7%,0 29.3%)}
   .pad .stop:hover{filter:brightness(1.08)} .pad .stop:active,.pad .stop.press{background:var(--err);color:#000;transform:scale(.94);filter:brightness(.9)}
+  /* A command the car did not put on the CAN bus. The server returns 503 with a
+     reason; without this the button looked identical whether the frames went out
+     or not, which is how a fleet-wide dead e-stop stayed invisible. */
+  .pad button.cmdfail{outline:2px solid var(--err);outline-offset:2px;animation:cmdfail 1s ease-out}
+  @keyframes cmdfail{0%{background:var(--err);color:#000}100%{}}
   .spacer{visibility:hidden}
   .hint{margin-top:10px;font-size:10.5px;color:var(--muted);text-align:center;letter-spacing:.3px}
 
@@ -420,23 +425,39 @@ function deriveServiceKey(vin, serial){
   // firmware deadman): each repeat just refreshes the motor's deadman so it keeps
   // running smoothly; releasing stops the keepalives and the motor coasts to stop.
   let repeatMs = 150;
-  function sendCmd(cmd){
-    fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({cmd})}).catch(()=>{});
+  // The server answers 503 with a diagnostic when frames did not reach the CAN bus.
+  // This used to be .catch(()=>{}) with no .then, so a FAILED e-stop looked exactly
+  // like a successful one: same blip, same silence. Surface it on the button.
+  function sendCmd(cmd, btn){
+    return fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cmd})})
+      .then(r=>r.json().catch(()=>({ok:r.ok})))
+      .then(j=>{ if(btn) btn.classList.toggle('cmdfail', j && j.ok===false); return j; })
+      .catch(()=>{ if(btn) btn.classList.add('cmdfail'); return {ok:false}; });
   }
   function blip(btn){ btn.classList.add('press'); setTimeout(()=>btn.classList.remove('press'),120); }
 
   document.querySelectorAll('.pad button').forEach(btn=>{
     const cmd=btn.dataset.cmd;
     if(cmd==='stop'){
-      btn.addEventListener('click',()=>{ blip(btn); sendCmd('stop'); });
+      // RETRY THE E-STOP. Everything else is sent repeatedly while held, so one
+      // lost command is self-healing; stop is a single shot, and it is the one
+      // command issued exactly when the bus is most likely to be saturated -- a
+      // contestant scripting the relay at full speed is why someone is reaching
+      // for it. The server retries at the socket too; this covers the request.
+      btn.addEventListener('click',()=>{
+        blip(btn);
+        sendCmd('stop', btn).then(j=>{
+          if(j && j.ok===false){ setTimeout(()=>sendCmd('stop', btn),150); }
+        });
+      });
       return;
     }
     let timer=null;
     btn._start=(e)=>{ if(e){ if(e.preventDefault)e.preventDefault();
         try{ if(e.pointerId!=null) btn.setPointerCapture(e.pointerId); }catch(_){} }
       if(timer)return;
-      btn.classList.add('press'); sendCmd(cmd); timer=setInterval(()=>sendCmd(cmd),repeatMs); };
+      btn.classList.add('press'); sendCmd(cmd, btn); timer=setInterval(()=>sendCmd(cmd, btn),repeatMs); };
     // Release only stops the keepalives; the node's step buffer drains on its own.
     // Deliberately NO 'coast' here -- a spurious release must never be able to
     // wipe motion (that was zeroing the buffer between every frame).

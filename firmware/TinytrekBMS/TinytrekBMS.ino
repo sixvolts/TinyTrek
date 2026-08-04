@@ -64,6 +64,20 @@ uint8_t       c3Count        = 15;
 unsigned long c3WindowMs     = 3000;
 bool          haveC2 = false, haveC3 = false, haveTuning = false;
 
+// Which CHUNKS of each code have actually arrived: bit0 = chunk 0 (bytes 0-5),
+// bit1 = chunk 1 (bytes 6-7). A code is complete only at 0x03.
+//
+// WHY THIS EXISTS. haveC2/haveC3 used to be set by the chunk-1 branch alone, so
+// "I saw the last chunk" was taken to mean "I have the whole code". A node that
+// missed chunk 0 -- exactly the case the Pi's 6-second repeat burst exists to
+// cover, e.g. a replacement board still booting when provisioning ran -- would
+// latch a code of six zero bytes plus two good ones, store it to EEPROM, and then
+// refuse all further config because cfgReady() had flipped. It emits a garbage
+// flag forever, and since cfgLoad() restores the latch from the magic byte it
+// survives every reboot. There is no CAN or serial path to undo it: the board has
+// to be physically erased. Chunks are cheap to count; do that instead.
+uint8_t       c2Chunks = 0, c3Chunks = 0;
+
 // Flash layout: [magic][C2 x8][C3 x8][pivotRpm][c2win/10][c3count][c3win/100]
 static void cfgLoad() {
   EEPROM.begin(32);
@@ -74,6 +88,7 @@ static void cfgLoad() {
   c3Count        = EEPROM.read(19); if (c3Count > C3_MAX) c3Count = C3_MAX;
   c3WindowMs     = (unsigned long)EEPROM.read(20) * 100;
   haveC2 = haveC3 = haveTuning = true;
+  c2Chunks = c3Chunks = 0x03;   // a stored code is by definition complete
 }
 
 static void cfgStore() {
@@ -237,9 +252,26 @@ static void noteCommand(uint8_t idx, uint8_t dir, uint8_t rpm) {
   if (dir == 0x00) { c3Len = 0; c3Head = 0; return; }   // an explicit stop breaks the run
 
   uint8_t other = idx ^ 1;
-  bool sameDirPair = lastCmdMs[other] != 0
-                  && lastDir[other] == dir
+  bool paired      = lastCmdMs[other] != 0
                   && (now - lastCmdMs[other]) <= c2PairWindowMs;
+  bool sameDirPair = paired && lastDir[other] == dir;
+
+  // A PAIR IS CONSUMED ONCE EVALUATED. Without this, the partner timestamp stays
+  // live and pairs again with whatever arrives next, so two legitimate commands
+  // that were never issued together get judged as if they were.
+  //
+  // That was not theoretical. The C1 pivot sends L then R with OPPOSITE
+  // directions, which is correctly not a translation. But call the routine twice
+  // with opposite option bytes inside the 250 ms window and the boundary lines up:
+  // the first call's R (dir 0x02) is still live when the second call's L (dir 0x02)
+  // arrives, the directions match, and C2 fires. Sweeping the routine's option byte
+  // from a script is the single most likely thing a team does after solving C1, so
+  // the most obvious next move handed out the next challenge's code for free.
+  //
+  // Clearing both means a pair must be formed from two FRESH commands. A real
+  // translation still fires on every L+R couple, so C3's consecutive-hit counting
+  // is unchanged.
+  if (paired) { lastCmdMs[0] = 0; lastCmdMs[1] = 0; }
 
   // C2: both wheels commanded the SAME way inside a short window. That is a
   // translation, and no legitimate interface commands one while the panel is
@@ -252,7 +284,13 @@ static void noteCommand(uint8_t idx, uint8_t dir, uint8_t rpm) {
   // positive test and then fires 0x7D2 on the car's OWN pivot routine the moment
   // the pivot rpm is changed -- leaking the C3 code before anyone attempts the
   // challenge. It is rpm AND direction, always.
-  if (armMask & ARM_C3) {
+  // ONLY EVALUATED PAIRS COUNT, and only they can break the run. The first command
+  // of a pair has no partner to be same-direction WITH, so it is not yet evidence
+  // either way. Letting it reach the else branch clears the run on every other
+  // command -- and since a pair now consumes both timestamps, every second command
+  // is a first-of-pair, so the hit count would never exceed one and C3 could never
+  // fire at all.
+  if ((armMask & ARM_C3) && paired) {
     if (sameDirPair && rpm != pivotRpm) {
       if (c3Len < c3Count) { c3Hits[(c3Head + c3Len) % C3_MAX] = now; c3Len++; }
       else { c3Hits[c3Head] = now; c3Head = (c3Head + 1) % C3_MAX; }
@@ -290,30 +328,70 @@ void loop() {
     uint8_t rb[8] = {0};
     CAN.readBytes((char*)rb, rxDlc);
 
-    if (rxId == NODE_CFG_ID && rxDlc >= 2 && !cfgReady()) {
+    if (rxId == NODE_CFG_ID && rxDlc >= 2) {
       // [type][idx][payload]. Codes arrive as two 6-byte chunks.
+      //
+      // CODES are write-once: accepted only while unconfigured, so nothing on the
+      // bus can rewrite the answers on a car that is already in play. TUNING is
+      // NOT, deliberately -- see the 0x20 case.
+      bool locked = cfgReady();
+      bool dirty  = false;
       switch (rb[0]) {
         case 0x10:
-          if (rb[1] == 0) { memcpy(codeC2,     &rb[2], 6); }
-          else            { memcpy(codeC2 + 6, &rb[2], 2); haveC2 = true; }
+          if (locked) break;
+          if (rb[1] == 0) { memcpy(codeC2,     &rb[2], 6); c2Chunks |= 0x01; }
+          else            { memcpy(codeC2 + 6, &rb[2], 2); c2Chunks |= 0x02; }
+          haveC2 = (c2Chunks == 0x03);
           break;
         case 0x11:
-          if (rb[1] == 0) { memcpy(codeC3,     &rb[2], 6); }
-          else            { memcpy(codeC3 + 6, &rb[2], 2); haveC3 = true; }
+          if (locked) break;
+          if (rb[1] == 0) { memcpy(codeC3,     &rb[2], 6); c3Chunks |= 0x01; }
+          else            { memcpy(codeC3 + 6, &rb[2], 2); c3Chunks |= 0x02; }
+          haveC3 = (c3Chunks == 0x03);
           break;
         case 0x20:
+          // TUNING IS ACCEPTED EVEN WHEN ALREADY PROVISIONED, and that is the point.
+          //
+          // The whole 0x101 handler used to be gated on !cfgReady(), so a provisioned
+          // node silently discarded this record. The operator path says otherwise:
+          // ttos-dashboard.default tells you to raise the pivot rpm if the car grinds
+          // at 75, and ttos-provision-nodes says to re-run after changing it. The
+          // burst went out, the script printed done, and the BMS kept the old value.
+          //
+          // That divergence is not cosmetic. C3's discriminator is "same direction AND
+          // an rpm the pivot never uses". If the Pi pivots at 150 while this node still
+          // believes 75, a team replaying captured pivot frames satisfies both halves
+          // and collects the C3 code with no forgery at all -- defeating the property
+          // ARCHITECTURE.md section 6 calls mechanical rather than policy.
+          //
+          // Safe to leave open: 0x101 is refused by the C3 relay's SEND path and is not
+          // in the C2 bridge allowlist, so no contestant-reachable path can inject it.
           if (rxDlc >= 6) {
-            pivotRpm       = rb[2];
-            c2PairWindowMs = (unsigned long)rb[3] * 10;
-            c3Count        = rb[4] > C3_MAX ? C3_MAX : rb[4];
-            c3WindowMs     = (unsigned long)rb[5] * 100;
+            uint8_t       newRpm   = rb[2];
+            unsigned long newPair  = (unsigned long)rb[3] * 10;
+            uint8_t       newCount = rb[4] > C3_MAX ? C3_MAX : rb[4];
+            unsigned long newWin   = (unsigned long)rb[5] * 100;
+            dirty = locked && (newRpm != pivotRpm || newPair != c2PairWindowMs ||
+                               newCount != c3Count || newWin != c3WindowMs);
+            pivotRpm       = newRpm;
+            c2PairWindowMs = newPair;
+            c3Count        = newCount;
+            c3WindowMs     = newWin;
             haveTuning     = true;
           }
           break;
       }
-      if (cfgReady()) {
+      if (!locked && cfgReady()) {
         cfgStore();
         Serial.println("provisioned: codes and thresholds stored, detection ARMED");
+      } else if (dirty) {
+        // Persist a retune so it survives the next power cycle, exactly as the
+        // original provisioning does.
+        cfgStore();
+        Serial.print("retuned: pivotRpm="); Serial.print(pivotRpm);
+        Serial.print(" c2win="); Serial.print(c2PairWindowMs);
+        Serial.print(" c3count="); Serial.print(c3Count);
+        Serial.print(" c3win="); Serial.println(c3WindowMs);
       }
     } else if (rxId == HEARTBEAT_ID) {
       lastHeartbeatMs = millis();

@@ -30,8 +30,17 @@ if [ "$(id -u)" != 0 ]; then
     echo "must run as root" >&2; exit 1
 fi
 
+# LOOPBACK, NOT THE AP ADDRESS. /api/provision-nodes is an operator action that
+# sprays both Data IDs and the C2/C3 codes onto the drive bus, so the dashboard
+# refuses it from anywhere but 127.0.0.1 -- otherwise any contestant associated to
+# the AP could trigger it, and (before publishFrame filtered 0x101) read the codes
+# straight off the DRIVE tab their C2 solve had already unlocked.
+#
+# Only the PORT is taken from the config; the host is fixed here.
 ADDR=$(sed -n 's/^TTOS_DASH_ADDR=//p' /etc/default/ttos-dashboard 2>/dev/null | head -n 1)
-[ -n "$ADDR" ] || ADDR="192.168.244.1:80"
+PORT=${ADDR##*:}
+case "$PORT" in ''|*[!0-9]*) PORT=80 ;; esac
+ADDR="127.0.0.1:${PORT}"
 CAR=$(grep -E '^TTOS_CAR_ID=' /etc/ttos/provision.src 2>/dev/null | cut -d= -f2)
 
 printf '\n=== provisioning CAN nodes -- car %s ===\n\n' "${CAR:-UNPROVISIONED}"

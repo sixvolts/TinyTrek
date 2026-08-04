@@ -112,19 +112,43 @@ out.append("QUIT")
 print("\n".join(out))
 PYEOF
 )
-FLAGS=$(python3 - <<'PYEOF' &
-import sys, time
+# THE OBSERVER MUST ACTUALLY OVERLAP THE CLIENT. This was written as
+#   FLAGS=$(python3 ... &)
+# which does not background anything useful: command substitution blocks until the
+# pipe closes, so the 9-second capture ran to completion BEFORE relaycli was
+# launched. FLAGS came back empty every time -- and nothing asserted on it, so the
+# suite printed "all 8 relay assertions passed" regardless.
+#
+# That is why D1-D7 reached the fleet: this suite has never once verified that C3
+# is solvable end to end. Redirect to a file, keep the real PID, and wait on it.
+OBSOUT=$(mktemp)
+python3 - > "$OBSOUT" 2>/dev/null <<'PYEOF' &
+import sys
 sys.path.insert(0, "lib")
 from ttoscan import DIAG, Observer
 o = Observer(DIAG); o.drain()
-got = o.collect(9.0, match=lambda f: f.can_id in (0x7D1, 0x7D2))
+got = o.collect(12.0, match=lambda f: f.can_id in (0x7D1, 0x7D2))
 o.close()
 print(" ".join(sorted({hex(f.can_id) for f in got})))
 PYEOF
-)
+OBSPID=$!
 sleep 1
 printf '%s' "$CMDS" | $SSH "$DUT_USER@$DUT" "python3 /tmp/relaycli.py ${ADDR%:*} ${ADDR##*:}" >/dev/null 2>&1 || true
-wait
+wait "$OBSPID" 2>/dev/null || true
+FLAGS=$(cat "$OBSOUT" 2>/dev/null); rm -f "$OBSOUT"
+
+# --- R9 / C6: assert it. This is the end-to-end proof that the whole chain works:
+# key derivation, relay auth, the protection CRC, the drive bus, the BMS detector,
+# and the cangw rule that carries 0x7D2 back to the contestant's tap. Any one of
+# them broken makes the car unsolvable, and every one of them has been broken at
+# least once during development.
+case "$FLAGS" in
+    *0x7d2*) ck "R9  sustained forged commanding trips C3 and 0x7D2 reaches DIAG" 1 ;;
+    *0x7d1*) ck "R9  sustained forged commanding trips C3 and 0x7D2 reaches DIAG" 0 \
+                "saw only $FLAGS -- C2 fired but C3 did not. Check the BMS c3Count/c3WindowMs tuning and that pivotRpm matches the Pi." ;;
+    *)       ck "R9  sustained forged commanding trips C3 and 0x7D2 reaches DIAG" 0 \
+                "NO flag frames on DIAG at all. Either the forged frames never reached the drive bus, or the BMS detectors are stood down (run ttos-reset), or the cangw 0x7D1/0x7D2 rules are missing." ;;
+esac
 printf "\n%s\n" "$( [ "$fail" = 0 ] && printf "${GRN}all %d relay assertions passed${RST}" "$pass" \
                                    || printf "${RED}%d of %d failed${RST}" "$fail" "$((pass+fail))" )"
 [ "$fail" = 0 ]

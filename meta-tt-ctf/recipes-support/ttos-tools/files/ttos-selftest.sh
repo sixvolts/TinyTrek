@@ -135,7 +135,34 @@ check_can(){ # $1=iface  $2=expect_fd(0/1)
             ok "$ifc is classic CAN 2.0 (correct for the drive bus)"
         fi
     fi
-    [ "$STATE" = "ERROR-ACTIVE" ] && ok "$ifc state ERROR-ACTIVE" || sk "$ifc state = ${STATE:-?} (ERROR-ACTIVE needs a wired, terminated bus)"
+    # BUS-OFF AND ERROR-PASSIVE ARE FAILURES, NOT SKIPS.
+    #
+    # This was one bucket: anything that was not ERROR-ACTIVE became a SKIP, and
+    # sk() never touches the FAIL count -- so the pre-event go/no-go gate exited 0
+    # on a controller that had taken itself off the bus. candrive.network sets no
+    # restart-ms, so a BUS-OFF controller stays there until someone bounces the
+    # link; the car cannot drive and nothing else in this script notices, because
+    # the other checks (admin UP, bitrate, no dbitrate) all pass on a dead bus.
+    #
+    # The states mean genuinely different things and must not share a verdict:
+    #   ERROR-ACTIVE   normal.
+    #   ERROR-WARNING  errors accumulating -- wiring or termination, worth saying.
+    #   ERROR-PASSIVE  the controller has backed off. Nothing is acknowledging it.
+    #   BUS-OFF        it has removed itself. No traffic at all until reset.
+    #   STOPPED/empty  never brought up, or nothing wired yet -- the original
+    #                  "unwired bench" case, and the only one that is really a skip.
+    case "$STATE" in
+        ERROR-ACTIVE)
+            ok "$ifc state ERROR-ACTIVE" ;;
+        BUS-OFF)
+            no "$ifc is BUS-OFF -- the controller removed itself from the bus and will NOT recover on its own (no restart-ms). This car cannot drive. Bounce the link: ip link set $ifc down && ip link set $ifc up" ;;
+        ERROR-PASSIVE)
+            no "$ifc is ERROR-PASSIVE -- transmits are not being acknowledged. Nothing else is alive on this bus: check wiring, termination and that the nodes are powered" ;;
+        ERROR-WARNING)
+            no "$ifc is ERROR-WARNING -- errors are accumulating. Check termination before this reaches ERROR-PASSIVE" ;;
+        *)
+            sk "$ifc state = ${STATE:-?} (ERROR-ACTIVE needs a wired, terminated bus)" ;;
+    esac
 }
 check_can candrive 0   # DRIVE: must be CLASSIC -- FD here would bus-off the motor nodes
 check_can candiag 1   # DIAG: must be FD -- 64-byte diagnostic responses live here

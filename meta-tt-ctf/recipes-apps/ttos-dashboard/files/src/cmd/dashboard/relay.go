@@ -164,8 +164,8 @@ func relaySession(c net.Conn, key, driveIface string) {
 	defer c.Close()
 	ip, _, _ := net.SplitHostPort(c.RemoteAddr().String())
 
-	w := bufio.NewWriter(c)
-	say := func(s string) { w.WriteString(s + "\r\n"); w.Flush() }
+	w := &relayWriter{w: bufio.NewWriter(c)}
+	say := func(s string) { _ = w.line(s) }
 
 	if relayThrottled(ip) {
 		relayLog("auth throttled for %s", ip)
@@ -173,18 +173,21 @@ func relaySession(c net.Conn, key, driveIface string) {
 		return
 	}
 
-	w.WriteString(relayBanner)
-	w.Flush()
+	_ = w.writef("%s", relayBanner)
 
 	_ = c.SetReadDeadline(time.Now().Add(60 * time.Second))
 	r := bufio.NewReader(c)
 	authed := false
-	var sub *canbus.Conn
-	defer func() {
-		if sub != nil {
-			sub.Close()
+	// subStop signals the streaming goroutine to exit; it closes the CAN socket
+	// itself. Never close the socket from here -- see relayStream.
+	var subStop chan struct{}
+	stopSub := func() {
+		if subStop != nil {
+			close(subStop)
+			subStop = nil
 		}
-	}()
+	}
+	defer stopSub()
 
 	for {
 		line, err := r.ReadString('\n')
@@ -273,7 +276,7 @@ func relaySession(c net.Conn, key, driveIface string) {
 			say("OK queued")
 
 		case "SUB":
-			if sub != nil {
+			if subStop != nil {
 				say("OK already subscribed")
 				continue
 			}
@@ -282,16 +285,13 @@ func relaySession(c net.Conn, key, driveIface string) {
 				say("ERR cannot open " + driveIface)
 				continue
 			}
-			sub = conn
+			subStop = make(chan struct{})
 			relayLog("subscribe from %s", ip)
-			go relayStream(conn, c, w)
+			go relayStream(conn, c, w, subStop)
 			say("OK subscribed")
 
 		case "UNSUB":
-			if sub != nil {
-				sub.Close()
-				sub = nil
-			}
+			stopSub()
 			say("OK unsubscribed")
 
 		case "QUIT":
@@ -304,11 +304,33 @@ func relaySession(c net.Conn, key, driveIface string) {
 	}
 }
 
-// relayStream pushes DRIVE-bus frames to a subscribed client.
-func relayStream(conn *canbus.Conn, c net.Conn, w *bufio.Writer) {
+// relayStream pushes DRIVE-bus frames to a subscribed client until stop is closed.
+//
+// IT OWNS THE SOCKET AND CLOSES IT ITSELF. UNSUB used to call sub.Close() while
+// this goroutine was parked in ReadFrame, on the strength of a comment in canbus
+// claiming Close unblocks a pending read. It does not, for a raw fd and a blocking
+// read(2): the goroutine and its OS thread stayed parked, one leaked per SUB/UNSUB
+// cycle, and the freed fd number was immediately reusable -- so a stranded reader
+// could end up draining a socket that canbus.Open had since handed to udsServe.
+//
+// Instead the socket gets a short read timeout, this loop checks stop between
+// polls, and the goroutine that does the reading is the one that does the closing.
+func relayStream(conn *canbus.Conn, c net.Conn, w *relayWriter, stop <-chan struct{}) {
+	defer conn.Close()
+	// Long enough that an idle subscription costs almost nothing, short enough that
+	// UNSUB feels instant.
+	_ = conn.SetReadTimeout(250 * time.Millisecond)
 	for {
+		select {
+		case <-stop:
+			return
+		default:
+		}
 		f, err := conn.ReadFrame()
 		if err != nil {
+			if canbus.IsTimeout(err) {
+				continue // no frame in this window; go back and re-check stop
+			}
 			return
 		}
 		// NEVER stream node provisioning. SUB is raw drive-bus read access, and
@@ -319,14 +341,36 @@ func relayStream(conn *canbus.Conn, c net.Conn, w *bufio.Writer) {
 			continue
 		}
 		_ = c.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		if _, err := fmt.Fprintf(w, "FRAME %03X#%X\r\n", f.ID, f.Data); err != nil {
-			return
-		}
-		if w.Flush() != nil {
+		if err := w.writef("FRAME %03X#%X\r\n", f.ID, f.Data); err != nil {
 			return
 		}
 	}
 }
+
+// relayWriter serialises writes to one client connection.
+//
+// The command loop and relayStream both write to the same *bufio.Writer, which is
+// not safe for concurrent use -- and SUB-then-script-SEND is the normal Challenge 3
+// workflow, so the two run together by design. The realistic damage is interleaved
+// or dropped output rather than a crash, but a lost "OK queued" is worse than it
+// sounds: the banner tells contestants to wait for it, so their client desyncs and
+// they read it as their forgery being rejected. That is exactly the unfair stalling
+// the relay's retry logic was written to avoid.
+type relayWriter struct {
+	mu sync.Mutex
+	w  *bufio.Writer
+}
+
+func (rw *relayWriter) writef(format string, a ...any) error {
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
+	if _, err := fmt.Fprintf(rw.w, format, a...); err != nil {
+		return err
+	}
+	return rw.w.Flush()
+}
+
+func (rw *relayWriter) line(s string) error { return rw.writef("%s\r\n", s) }
 
 // relaySend transmits with a bounded retry on ENOBUFS.
 //

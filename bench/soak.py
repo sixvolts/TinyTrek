@@ -86,8 +86,22 @@ def soak_c5(args, car, host, pw):
 
     # Detectors only fire while the car is LOCKED. Reset first, or a previously
     # redeemed code stands them down and the whole soak passes for the wrong reason.
-    car_ssh(host, pw, f"echo '{pw}' | sudo -S -p '' ttos-reset >/dev/null 2>&1; echo done")
-    time.sleep(5)
+    #
+    # THE RESET MUST BE VERIFIED. This was a fire-and-forget ssh with its output
+    # sent to /dev/null, its return value discarded, and a trailing `; echo done`
+    # that guaranteed exit 0 -- so the comment above described a risk the code then
+    # did nothing about. Thirty minutes of "zero flags" from a car whose detectors
+    # were already stood down is exactly the quiet false pass this file's docstring
+    # warns about, and the pre-flight below cannot catch it: a VIN read succeeds
+    # regardless of the arm mask.
+    #
+    # carreset.reset_car() keys on ttos-reset's exit status and aborts loudly.
+    sys.path.insert(0, os.path.join(HERE, "lib"))
+    os.environ.setdefault("DUT", host)
+    os.environ["DUT_PASS"] = pw
+    import carreset  # noqa: E402
+    carreset.DUT, carreset.DUT_PASS = host, pw
+    carreset.reset_car(wait=5.0)
 
     deadline = time.monotonic() + args.c5_minutes * 60
     pivots = 0
