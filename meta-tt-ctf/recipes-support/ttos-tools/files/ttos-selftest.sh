@@ -111,7 +111,14 @@ check_can(){ # $1=iface  $2=expect_fd(0/1)
     # <...,UP,...> admin flag, not 'state UP'.
     i=0; while [ "$i" -lt 8 ]; do ip link show "$ifc" 2>/dev/null | head -n 1 | grep -qE '[<,]UP[,>]' && break; i=$((i+1)); sleep 1; done
     D=$(ip -details -statistics link show "$ifc" 2>/dev/null)
-    STATE=$(echo "$D" | grep -o 'can state [A-Z-]*' | awk '{print $3}')
+    # An FD interface prints "can <FD> state ERROR-ACTIVE", a classic one prints
+    # "can state ERROR-ACTIVE". Matching only the classic spelling left STATE EMPTY
+    # for candiag on every run this script has ever made -- and empty is treated
+    # below as the "nothing wired yet" skip, so the DIAG bus controller state has
+    # never actually been checked. That is the exact bug the block below was
+    # written to fix, still live on the other interface: a bus-off DIAG controller
+    # would have skipped rather than failed, on the one bus a contestant plugs into.
+    STATE=$(echo "$D" | grep -oE 'can (<[A-Z]+> )?state [A-Z-]+' | awk '{print $NF}')
     BR=$(echo "$D" | grep -o 'bitrate [0-9]*' | head -n 1 | awk '{print $2}')
     if ip link show "$ifc" 2>/dev/null | head -n 1 | grep -qE '[<,]UP[,>]'; then ok "$ifc is UP"
     else no "$ifc is DOWN (should come up automatically at boot)"; fi
