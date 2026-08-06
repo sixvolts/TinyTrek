@@ -78,8 +78,38 @@ receive an answer.**
 | `0x116` | BMS → all, 5 Hz | DRIVE | `[v_hi][v_lo][pwr][flags]` pack mV, rail state, LVC |
 | `0x7D1` | BMS → bus, 2 Hz while triggered | DRIVE→DIAG | C2 code, 8 ASCII |
 | `0x7D2` | BMS → bus, 2 Hz while triggered | DRIVE→DIAG | C3 code, 8 ASCII |
+| `0x7D5` | Pi → bus, echoing `0x7D1` | DIAG | `FLAG{<C2 code>}`, 14 ASCII, **FD** |
+| `0x7D6` | Pi → bus, echoing `0x7D2` | DIAG | `FLAG{<C3 code>}`, 14 ASCII, **FD** |
 | `0x7DF` / `0x7E0` | tester → Pi | DIAG | UDS functional / physical request |
 | `0x7E8` | Pi → tester | DIAG | UDS response |
+
+### Why the flags appear twice
+
+A flag has to be recognisable as a flag in a raw capture. A contestant in SavvyCAN
+or `candump` who sees eight printable characters go past on an otherwise binary bus
+has no way to know that was the prize unless someone already told them — which makes
+*solving* the challenge and *knowing you solved it* two different skills, and only
+one of them is under test.
+
+`FLAG{XXXXXXXX}` is fourteen bytes. The C2 and C3 codes are emitted by the BMS on
+the DRIVE bus, which is classic CAN with an eight-byte payload and classic-only
+MCP2515 nodes; the wrapper cannot go there, and shortening the code to fit would
+mean a firmware change plus a `flash_nuke` erase of every BMS in the fleet, because
+the codes are write-once.
+
+So the wrapper is applied where the code is *presented* rather than where it is
+emitted. C1 already arrives on the FD diagnostic bus and is wrapped at source, in
+the routine response. C2 and C3 are re-announced by the dashboard on `0x7D5`/`0x7D6`
+as FD frames when it sees the raw BMS frame go by (`cmd/dashboard/flag.go`).
+
+The announcement echoes **the bytes that were on the wire**, not the Pi's configured
+code. A BMS provisioned with the wrong code must show the wrong code; substituting
+the expected value here would mask a mis-provisioned board and turn a loud fault into
+one that only surfaces when a team's flag is rejected by the scoreboard.
+
+The kernel gateway's `0x7D1`/`0x7D2` forwarding is left alone, so both forms reach a
+contestant's tap and the two rules `ttos-reset` and `ttos-selftest` assert are still
+the right count.
 
 ### Drive command format
 

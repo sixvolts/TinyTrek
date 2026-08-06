@@ -698,7 +698,11 @@ def cmd_walk(args):
     code_c1 = ""
     try:
         r = t.routine(RID_PIVOT, 0x01)
-        code_c1 = r[4:].decode()
+        # The routine status record is the flag in submission form, FLAG{...}.
+        # 4 + 14 = 18 bytes is not a discrete CAN FD length, so the controller pads
+        # to 20 -- strip that. The payload is self-delimiting, which is why the pad
+        # is unambiguous rather than something to guess at.
+        code_c1 = r[4:].rstrip(b"\x00").decode(errors="replace")
         ok(f"car pivots, and returns  {B}{code_c1}{X}")
         note("Paste that into the panel to unlock tier 1.")
     except (NegResp, TypeError) as e:
@@ -820,12 +824,31 @@ def cmd_walk(args):
     return 0
 
 
+# The BMS emits the bare eight characters on 0x7D1/0x7D2 (classic CAN, and eight
+# bytes is the entire payload). The Pi re-announces the same code in FLAG{...} form
+# on 0x7D5/0x7D6, as CAN FD, because the diagnostic bus can carry the extra six
+# bytes and a raw capture otherwise gives a contestant no way to know that eight
+# printable characters were the prize.
+#
+# Prefer the announced form when both arrive: it is what the scoreboard wants.
+FLAG_IDS_RAW = {0x7D1: 2, 0x7D2: 3}
+FLAG_IDS_WRAPPED = {0x7D5: 2, 0x7D6: 3}
+
+
 def _await_flags(tp, seconds):
     out, deadline = {}, time.monotonic() + seconds
     while time.monotonic() < deadline:
         f = tp.recv(0.2)
-        if f and f.id in (0x7D1, 0x7D2):
-            out[f.id] = f.data.rstrip(b"\x00").decode(errors="replace")
+        if not f:
+            continue
+        if f.id in FLAG_IDS_WRAPPED:
+            # Key the wrapped form under the raw ID so every existing caller --
+            # which looks up 0x7D1 and 0x7D2 -- gets the submittable string with no
+            # change, and stop looking at the raw copy for that challenge.
+            raw = 0x7D1 if FLAG_IDS_WRAPPED[f.id] == 2 else 0x7D2
+            out[raw] = f.data.rstrip(b"\x00").decode(errors="replace")
+        elif f.id in FLAG_IDS_RAW:
+            out.setdefault(f.id, f.data.rstrip(b"\x00").decode(errors="replace"))
     return out
 
 

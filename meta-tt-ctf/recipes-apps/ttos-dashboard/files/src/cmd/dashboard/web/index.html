@@ -19,6 +19,21 @@
     --mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
     --sans:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
   }
+  .flagbox{display:flex;gap:6px}
+  .flagbox input{flex:1;min-width:0;padding:7px 9px;font-family:var(--mono);font-size:13px;
+    text-transform:uppercase;color:var(--text);background:var(--bg);
+    border:1px solid var(--border);border-radius:6px}
+  .flagbox input:focus{outline:none;border-color:var(--accent)}
+  .flagbox button{padding:7px 13px;font-size:13px;color:var(--text);background:var(--panel2);
+    border:1px solid var(--border);border-radius:6px;cursor:pointer}
+  .flagbox button:hover{border-color:var(--accent)}
+  .flagbox button[disabled]{opacity:.5;cursor:default}
+  .flag-msg{margin-top:8px;font-size:12px;min-height:16px;color:var(--muted);word-break:break-all}
+  .flag-msg.ok{color:var(--ok)}
+  .flag-msg.bad{color:var(--err)}
+  /* The submission form, shown big enough to copy off the screen accurately. */
+  .flag-msg .sub{display:block;margin-top:5px;font-family:var(--mono);font-size:15px;
+    color:var(--brand);user-select:all}
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
   body{background:var(--bg);color:var(--text);font-family:var(--sans);
@@ -165,6 +180,17 @@
         <h3>Network</h3>
         <div class="row">WiFi <span class="pill unknown" id="ind-wifi">–</span></div>
         <div class="row">Ethernet <span class="pill unknown" id="ind-eth">–</span></div>
+      </div>
+
+      <div class="card">
+        <h3>Challenge codes</h3>
+        <div class="flagbox">
+          <input id="flag-in" type="text" spellcheck="false" autocomplete="off"
+                 placeholder="XXXXXXXX or FLAG{XXXXXXXX}" maxlength="20">
+          <button id="flag-go">Redeem</button>
+        </div>
+        <div class="flag-msg" id="flag-msg"></div>
+        <div class="hint">Codes the car gives you. Each one unlocks more of this panel.</div>
       </div>
 
       <div class="card">
@@ -485,21 +511,81 @@ function deriveServiceKey(vin, serial){
     if(btn&&btn._stop) btn._stop();
   });
 
-  // ---- boot ----
-  fetch('/api/info').then(r=>r.json()).then(info=>{
-    if(info.car){ document.getElementById('car-id').textContent=info.car.id||'–';
-      document.getElementById('car-host').textContent=info.car.host||''; }
-    if(typeof info.repeatMs==='number' && info.repeatMs>0) repeatMs=info.repeatMs;
-    // Only draw a bus tab if the server will actually stream that bus's frames.
-    // On a competition car "frames" is empty (raw views are gated), so no tab is
-    // drawn at all -- a locked panel rather than one stuck on "Waiting for frames".
-    (info.frames||[]).filter(i=>(info.ifaces||[]).includes(i)).forEach(addBus);
-    if(info.car && info.car.variant && !/production/i.test(info.car.variant)){
-      const b=document.createElement('div'); b.className='variant-warn';
-      b.textContent=info.car.variant;
-      document.querySelector('header').appendChild(b);
+  // ---- challenge codes ----
+  //
+  // The panel is how a code becomes an unlock, so this box is the whole redemption
+  // path for a contestant with a browser -- the /api/flag endpoint existed long
+  // before any UI reached it, and the bench tests drive it with curl, which is why
+  // that gap survived as long as it did.
+  //
+  // Accepts the bare eight characters or the FLAG{...} form the car puts on the
+  // bus; the server unwraps either. On success it echoes back the submission form,
+  // which is what goes to the scoreboard -- a team may have only ever seen the
+  // bare code, and the scoreboard will not take that.
+  const flagIn=document.getElementById('flag-in');
+  const flagGo=document.getElementById('flag-go');
+  const flagMsg=document.getElementById('flag-msg');
+
+  function setFlagMsg(text, cls, submission){
+    flagMsg.className='flag-msg'+(cls?' '+cls:'');
+    flagMsg.textContent=text;
+    if(submission){
+      const s=document.createElement('span'); s.className='sub';
+      s.textContent=submission; flagMsg.appendChild(s);
     }
-  }).catch(()=>{});
+  }
+
+  function redeem(){
+    const code=flagIn.value.trim();
+    if(!code) return;
+    flagGo.disabled=true;
+    setFlagMsg('Checking…','');
+    fetch('/api/flag',{method:'POST',headers:{'Content-Type':'application/json'},
+                       body:JSON.stringify({code:code})})
+      .then(r=>r.json())
+      .then(res=>{
+        if(res.ok){
+          setFlagMsg(res.msg||'Unlocked', 'ok',
+                     res.flag?'Submit to the scoreboard:  '+res.flag:'');
+          flagIn.value='';
+          // A tier change can reveal a bus. Tabs are drawn from /api/info, so
+          // re-read it rather than making the contestant reload the page and
+          // wonder whether the redemption took.
+          refreshInfo();
+        } else {
+          setFlagMsg(res.msg||'Not a valid code for this car','bad');
+        }
+      })
+      .catch(()=>setFlagMsg('The car did not answer. Still on its WiFi?','bad'))
+      .then(()=>{ flagGo.disabled=false; });
+  }
+
+  flagGo.addEventListener('click', redeem);
+  flagIn.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); redeem(); } });
+  // The drive controls bind arrows/WASD globally; typing a code must not steer.
+  flagIn.addEventListener('keydown', e=>e.stopPropagation());
+
+  // ---- boot ----
+  let variantShown=false;
+  function refreshInfo(){
+    return fetch('/api/info').then(r=>r.json()).then(info=>{
+      if(info.car){ document.getElementById('car-id').textContent=info.car.id||'–';
+        document.getElementById('car-host').textContent=info.car.host||''; }
+      if(typeof info.repeatMs==='number' && info.repeatMs>0) repeatMs=info.repeatMs;
+      // Only draw a bus tab if the server will actually stream that bus's frames.
+      // On a competition car "frames" is empty (raw views are gated), so no tab is
+      // drawn at all -- a locked panel rather than one stuck on "Waiting for frames".
+      // addBus is idempotent, so re-running this after an unlock only ever adds.
+      (info.frames||[]).filter(i=>(info.ifaces||[]).includes(i)).forEach(addBus);
+      if(!variantShown && info.car && info.car.variant && !/production/i.test(info.car.variant)){
+        variantShown=true;
+        const b=document.createElement('div'); b.className='variant-warn';
+        b.textContent=info.car.variant;
+        document.querySelector('header').appendChild(b);
+      }
+    }).catch(()=>{});
+  }
+  refreshInfo();
   connect();
   requestAnimationFrame(flush);
 })();

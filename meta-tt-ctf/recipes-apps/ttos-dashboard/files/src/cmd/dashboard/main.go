@@ -122,6 +122,11 @@ func main() {
 		ctfDiagIface = *ctfDiagIf
 		go udsServe(*ctfDiagIf)
 
+		// Re-announce the BMS flag frames onto the DIAG bus in FLAG{...} form.
+		// The raw 0x7D1/0x7D2 the gateway forwards are eight bare characters with
+		// nothing to mark them as the prize; see flag.go.
+		go openFlagAnnounce(*ctfDiagIf)
+
 		// C2 inbound path. Reads the DIAG bus continuously but forwards nothing
 		// unless the self-test routine has opened the window; see bridge.go for why
 		// this is Go and not a cangw rule.
@@ -330,6 +335,12 @@ func readLoop(ifc string) {
 				break
 			}
 			recordBattery(f)
+			// Only the DRIVE-bus original triggers an echo. The gateway also
+			// delivers 0x7D1/0x7D2 to DIAG, and announcing on that copy too would
+			// double every flag frame on the bus.
+			if f.Iface != ctfDiagIface {
+				announceFlag(f)
+			}
 			publishFrame(f)
 		}
 		time.Sleep(time.Second)

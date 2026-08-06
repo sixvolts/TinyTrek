@@ -165,6 +165,12 @@ class Tester:
         return self.request(req, **kw)
 
     def pivot(self, direction=PIVOT_CW, **kw):
-        """Run the C1 routine. Returns the routineStatusRecord (the C1 code)."""
+        """Run the C1 routine. Returns the routineStatusRecord.
+
+        That record is the C1 flag in submission form -- b"FLAG{XXXXXXXX}" -- not
+        the bare eight characters. 4 + 14 = 18 bytes is not a discrete CAN FD
+        length so the controller pads to 20; the payload ends at the brace, so the
+        pad strips unambiguously.
+        """
         r = self.routine(RID_PIVOT, RC_START, direction, **kw)
-        return r[4:] if r and len(r) > 4 else None
+        return r[4:].rstrip(b"\x00") if r and len(r) > 4 else None

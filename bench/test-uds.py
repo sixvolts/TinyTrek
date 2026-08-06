@@ -180,9 +180,13 @@ def main():
                               "motor firmware would disagree in Phase 3")
 
             got = code.decode(errors="replace") if code else ""
+            # The response carries the SUBMISSION form, FLAG{...}, not the bare
+            # eight characters: a raw capture has to identify itself as a flag
+            # without our tooling being the thing that says so. See flag.go.
+            want = "FLAG{%s}" % car["code_c1"]
             check(f"D4  pivot {label} response carries the C1 flag",
-                  got == car["code_c1"],
-                  info=f"got {got!r}, expected {car['code_c1']!r}")
+                  got == want,
+                  info=f"got {got!r}, expected {want!r}")
 
         # ---- Phase 3 items --------------------------------------------------
         skip("D7  self-test routine in default session returns 0x7F 0x31 0x7E",

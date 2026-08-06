@@ -560,9 +560,20 @@ func udsPivot(req []byte, sub byte, rid uint16) []byte {
 		req[4], pivotSteps, pivotRPM)
 
 	// Positive response: 71 <sub> <rid hi> <rid lo> <routineStatusRecord>.
-	// The status record is the C1 code. At 4 + 8 = 12 bytes this exceeds a classic
-	// 8-byte frame, which is exactly why the DIAG bus is CAN FD -- it rides in one
-	// FD single frame and no segmentation layer is needed anywhere.
+	//
+	// The status record is the C1 flag in submission form -- FLAG{XXXXXXXX}, not
+	// the eight bare characters. This is the one flag the car hands over on the FD
+	// bus, so it is the one that has room to identify itself, and a contestant
+	// reading this response in SavvyCAN should not have to be told that the eight
+	// characters they are looking at are the prize. C2 and C3 get the same
+	// treatment by re-announcement, because their own frames cannot carry it
+	// (flag.go).
+	//
+	// At 4 + 14 = 18 bytes this exceeds a classic 8-byte frame -- which is exactly
+	// why the DIAG bus is CAN FD. It rides in one FD single frame and no
+	// segmentation layer is needed anywhere. 18 is not one of the discrete FD
+	// lengths, so the controller pads to 20; the payload is self-delimiting (it
+	// ends at the brace) so trailing pad bytes are unambiguous to any reader.
 	resp := []byte{sidRoutineControl + respOffset, sub, byte(rid >> 8), byte(rid)}
-	return append(resp, []byte(ident.CodeC1)...)
+	return append(resp, []byte(wrapFlag(ident.CodeC1))...)
 }

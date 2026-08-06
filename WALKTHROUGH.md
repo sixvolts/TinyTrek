@@ -165,7 +165,13 @@ rather than a translation — remember that, it is the whole basis of Challenge 
 
 ### 1.4 — Redeem
 
-Paste `1D8YZGBT` into the panel. The **DIAG bus tab** appears — you can now watch
+The routine's response carries the flag in submission form — `FLAG{1D8YZGBT}`, 14
+bytes, which is another thing that does not fit in a classic frame and rides fine in
+an FD one. The two flags that come off the *drive* bus cannot be wrapped at source
+(8 bytes is the whole payload there), so the Pi re-announces those on the diagnostic
+bus instead; see 2.6 and 3.7.
+
+Paste `FLAG{1D8YZGBT}` into the panel — the bare code works too. The **DIAG bus tab** appears — you can now watch
 the diagnostic bus you are already tapping. That is deliberately a modest reward:
 you get a nicer view of what you already have.
 
@@ -283,13 +289,18 @@ The BMS is watching the drive bus it already lives on. Both wheels commanded the
 direction inside 250 ms is a signature no legitimate interface produces, and it emits:
 
 ```
-0x7D1   "2FQYWXDM"     <- your C2 code, repeating at 2 Hz while the condition holds
+0x7D1   "2FQYWXDM"        <- from the BMS, on the DRIVE bus: 8 bare characters,
+                             because 8 bytes is the entire payload of a classic
+                             CAN frame and "FLAG{...}" is 14
+0x7D5   "FLAG{2FQYWXDM}"  <- the same code re-announced by the Pi on the DIAG bus
+                             as an FD frame, which has room to say what it is
 ```
 
-It repeats rather than firing once so that a team who solved it without a capture
-running can simply do it again.
+Both repeat at 2 Hz while the condition holds, rather than firing once, so that a
+team who solved it without a capture running can simply do it again.
 
-Paste it into the panel. The **DRIVE bus tab** appears, and the panel now names the
+You are tapped on DIAG, so you will see both. Submit the wrapped one; paste either
+into the panel. The **DRIVE bus tab** appears, and the panel now names the
 telematics interface outright — which is your entrance to Challenge 3.
 
 ---
@@ -438,8 +449,13 @@ Sustained same-direction commanding at an rpm the pivot never uses is the second
 signature the BMS recognises: 15 qualifying pairs inside 3 s.
 
 ```
-0x7D2   "3CX5E77Z"     <- your C3 code
+0x7D2   "3CX5E77Z"        <- from the BMS on the DRIVE bus, bare
+0x7D6   "FLAG{3CX5E77Z}"  <- re-announced by the Pi on DIAG, in submission form
 ```
+
+Note you can now see 0x7D2 from *two* vantage points: the diagnostic tap you have
+had since Challenge 1, and the drive bus you are subscribed to through the relay.
+Only the diagnostic side carries the wrapped announcement.
 
 Note *why* the rpm term is there and why C2's technique cannot reach it: composed
 frames are captured frames, so they structurally carry the pivot's rpm. Forgery is

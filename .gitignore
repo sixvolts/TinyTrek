@@ -43,3 +43,4 @@ ttos-provision.conf
 # Staged per-car challenge constants (SECRETS -- Data IDs and C2/C3 codes).
 # build.sh copies provisioning/firmware-constants.h in at flash time.
 /firmware/*/ttos-fleet.h
+__pycache__/

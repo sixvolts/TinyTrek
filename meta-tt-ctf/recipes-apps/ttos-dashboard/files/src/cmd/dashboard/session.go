@@ -232,12 +232,16 @@ func handleFlag(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"ok": false, "msg": "bad request"})
 		return
 	}
-	code := strings.ToUpper(strings.TrimSpace(body.Code))
+	// Accept either the bare code or the FLAG{...} form the car now shows on the
+	// bus and in this panel. A team pastes back exactly what they were given, and
+	// telling them that is wrong at the moment they are right is the worst place
+	// to be pedantic.
+	code := unwrapFlag(strings.ToUpper(strings.TrimSpace(body.Code)))
 	if len(code) != flagMinCodeLen {
 		// Malformed vs wrong, same principle as the relay: the length is visible
 		// on any code they already hold, so saying it costs nothing and saves a
 		// team from debugging a paste error as if it were a wrong answer.
-		writeJSON(w, map[string]any{"ok": false, "msg": "codes are 8 characters"})
+		writeJSON(w, map[string]any{"ok": false, "msg": "codes are 8 characters, bare or as FLAG{...}"})
 		return
 	}
 	if !ident.complete {
@@ -245,26 +249,35 @@ func handleFlag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Constant-time against each of THIS car's codes. Per-car codes are the
-	// anti-collusion boundary: a code shouted across the room does nothing here.
+	// Constant-time against each of THIS car's codes.
+	//
+	// NOTE: the codes are FLEET-WIDE, not per-car -- one set across all eight.
+	// This comment used to claim they were the anti-collusion boundary; they are
+	// not, and a code shouted across the room WILL work on a neighbouring car.
+	// Scoreboard-side that is handled by judging on demonstration; see
+	// provisioning/ADMIN-FLAGS.md.
 	eq := func(a, b string) bool {
 		return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 	}
+	// The submission form goes back with the success so the panel can show a team
+	// exactly what to hand the scoreboard. They may have arrived here holding only
+	// the bare eight characters -- off a placard, off a teammate, off a raw capture
+	// of 0x7D1 -- and never have seen the wrapped form at all.
 	switch {
 	case eq(code, ident.CodeC1):
 		raiseTier(tok, tierC1)
 		logf("flag", "C1 redeemed from %s -- session tier 1", ip)
-		writeJSON(w, map[string]any{"ok": true, "tier": tierC1, "msg": "Challenge 1 unlocked"})
+		writeJSON(w, map[string]any{"ok": true, "tier": tierC1, "flag": wrapFlag(code), "msg": "Challenge 1 unlocked"})
 	case eq(code, ident.CodeC2):
 		raiseTier(tok, tierC2)
 		markUnlocked(2)
 		logf("flag", "C2 redeemed from %s -- session tier 2, C2 detector stood down", ip)
-		writeJSON(w, map[string]any{"ok": true, "tier": tierC2, "msg": "Challenge 2 unlocked"})
+		writeJSON(w, map[string]any{"ok": true, "tier": tierC2, "flag": wrapFlag(code), "msg": "Challenge 2 unlocked"})
 	case eq(code, ident.CodeC3):
 		raiseTier(tok, tierC3)
 		markUnlocked(3)
 		logf("flag", "C3 redeemed from %s -- session tier 3, all detectors stood down", ip)
-		writeJSON(w, map[string]any{"ok": true, "tier": tierC3, "msg": "Challenge 3 unlocked -- full drive control"})
+		writeJSON(w, map[string]any{"ok": true, "tier": tierC3, "flag": wrapFlag(code), "msg": "Challenge 3 unlocked -- full drive control"})
 	default:
 		logf("flag", "rejected code from %s", ip)
 		writeJSON(w, map[string]any{"ok": false, "msg": "not a valid code for this car"})
