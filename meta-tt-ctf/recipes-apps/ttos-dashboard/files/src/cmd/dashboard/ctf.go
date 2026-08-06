@@ -135,6 +135,38 @@ func loadIdentity(path string) {
 	logf("info", "CTF identity loaded for car %s", ident.CarID)
 }
 
+// ---- factory / test mode ---------------------------------------------------
+
+// factoryMarker is written by ttos-provision.sh when a car boots with NO
+// provisioning file, and removed the moment one is applied.
+const factoryMarker = "/etc/ttos/factory"
+
+// inFactoryMode reports whether this car is unprovisioned and in TEST mode.
+//
+// WHY THE DASHBOARD CARES. Factory mode exists to make a freshly-assembled car
+// TESTABLE before it has an identity: open AP "TTOS-TEST", known ttos/ttos login,
+// and -- per the banner it prints on every console -- driving enabled. That last
+// part stopped being true when TTOS_DASH_DRIVE was retired: the control pad moved
+// behind the tier-3 session gate, and an unprovisioned car has no C3 code, so no
+// session can ever reach tier 3. The mode kept advertising the one capability it
+// exists to provide and no longer had it, which makes a correctly-built car
+// indistinguishable from a miswired one at exactly the moment you are trying to
+// tell those apart.
+//
+// Read once at startup, not per request: provisioning requires a reboot, so the
+// value cannot change under a running service, and this must not put a stat() in
+// the path of every control command.
+var factoryMode bool
+
+func loadFactoryMode() {
+	_, err := os.Stat(factoryMarker)
+	factoryMode = err == nil
+	if factoryMode {
+		logf("warn", "FACTORY/TEST MODE: this car is UNPROVISIONED. Drive controls are "+
+			"OPEN to anyone on the AP and no challenge is solvable. Provision before the event.")
+	}
+}
+
 func parseDataID(s string) uint16 {
 	s = strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(s), "0x"), "0X")
 	n, err := strconv.ParseUint(s, 16, 16)

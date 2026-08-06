@@ -6,8 +6,8 @@ It used to also emit judge-packet.md. That was dropped 2026-08-04: it had gone s
 in a way that mattered -- it listed per-car unlock codes after the fleet went uniform,
 and it named an exact Data ID when a correct Challenge 3 solve recovers a 256-member
 equivalence class and cannot identify the true value. Judging is a team showing an
-operator the code they recovered; the CTFd submission flags are the SUBMISSION_FLAGS
-constant below.
+operator the code they recovered. The submission flag is what the car itself puts on
+the diagnostic bus -- FLAG{<code>} -- see ADMIN-FLAGS.md.
 
 This is NOT gen-fleet.py. gen-fleet.py *generates* random values and re-running it
 changes every Data ID, unlock code, PSK and console password -- including ones
@@ -42,22 +42,31 @@ TXPOWER_MBM = 500
 # every reimage. ttos-provision has always supported TTOS_SSH_AUTHORIZED_KEY; the
 # generator simply never emitted it.
 #
-# Empty string = omit the line entirely, which is the right default for a car that
-# is going on a competition floor. Set it for bench and staging cars.
+# Empty string = omit the line entirely.
 #
 # NOT A SECRET: it is a public key. It does grant console access to whoever holds
-# the matching private key, so do not ship a build machine's key on an event car.
-OPERATOR_SSH_KEY = ""
+# the matching private key, so the key that ships must belong to a machine that
+# will actually BE at the event.
+#
+# THIS IS SET EXPLICITLY AND HAS NO FALLBACK, deliberately. It used to read
+#
+#     OPERATOR_SSH_KEY = ""
+#     if not OPERATOR_SSH_KEY and _KEY_PATH.exists():
+#         OPERATOR_SSH_KEY = _KEY_PATH.read_text().strip()
+#
+# which made the documented "empty = omit" unreachable: blanking the constant
+# silently reloaded the BUILD HOST's key from ~/.ssh/id_ed25519.pub, and eight
+# competition cars were rendered carrying arcana's key without anyone choosing
+# that. Whoever's key ships is now a visible edit to this line, and blanking it
+# does what it says.
+#
+# The key must belong to a machine that will be at the event.
+OPERATOR_SSH_KEY = (
+    "ssh-ed25519 "
+    "<operator-public-key> "
+    "operator@laptop"
+)
 
-_KEY_PATH = pathlib.Path.home() / ".ssh" / "id_ed25519.pub"
-if not OPERATOR_SSH_KEY and _KEY_PATH.exists():
-    OPERATOR_SSH_KEY = _KEY_PATH.read_text().strip()
-
-SUBMISSION_FLAGS = {
-    "C1": "FLAG[PIVOT_PIVOT_PIVOOOT]",
-    "C2": "FLAG[STRAIGHT_OUTTA_GATEWAY]",
-    "C3": "FLAG[THE_CALL_IS_COMING_FROM_INSIDE_THE_CAR]",
-}
 
 
 def _ssh_line(r):

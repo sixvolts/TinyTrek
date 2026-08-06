@@ -577,7 +577,15 @@ function deriveServiceKey(vin, serial){
       // drawn at all -- a locked panel rather than one stuck on "Waiting for frames".
       // addBus is idempotent, so re-running this after an unlock only ever adds.
       (info.frames||[]).filter(i=>(info.ifaces||[]).includes(i)).forEach(addBus);
-      if(!variantShown && info.car && info.car.variant && !/production/i.test(info.car.variant)){
+      // Unprovisioned cars drive freely and solve nothing. That combination looks
+      // like a working car, so say so where nobody can miss it.
+      if(!variantShown && info.factory){
+        variantShown=true;
+        const b=document.createElement('div'); b.className='variant-warn';
+        b.textContent='FACTORY / TEST MODE -- unprovisioned. Driving is open to anyone on this AP and no challenge is solvable.';
+        document.querySelector('header').appendChild(b);
+      }
+      else if(!variantShown && info.car && info.car.variant && !/production/i.test(info.car.variant)){
         variantShown=true;
         const b=document.createElement('div'); b.className='variant-warn';
         b.textContent=info.car.variant;

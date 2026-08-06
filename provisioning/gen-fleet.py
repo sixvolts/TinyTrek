@@ -24,11 +24,6 @@ TXPOWER_MBM  = 500
 # arc = (45/360)*2*pi*(track/2) = 3.7061in; steps = arc/(pi*dia)*200 = 102.03
 PIVOT_STEPS  = 102
 
-SUBMISSION_FLAGS = {
-    "C1": "FLAG[PIVOT_PIVOT_PIVOOOT]",
-    "C2": "FLAG[STRAIGHT_OUTTA_GATEWAY]",
-    "C3": "FLAG[THE_CALL_IS_COMING_FROM_INSIDE_THE_CAR]",
-}
 
 # ---- VIN (ISO 3779) --------------------------------------------------------
 TRANS = {**{str(d): d for d in range(10)},

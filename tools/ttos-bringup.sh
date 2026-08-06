@@ -6,25 +6,32 @@
 # ---------------------------------------------------------------------------
 # WHY THIS EXISTS
 #
-# An UNPROVISIONED car is inert BY DESIGN, and it looks exactly like a broken
-# one. All three of these are deliberate gates, not faults:
+# A car with no ttos-provision.conf boots into FACTORY/TEST mode: open AP
+# "TTOS-TEST", console login ttos/ttos, and drive controls OPEN on the panel --
+# that mode exists precisely so a freshly-assembled car can be exercised before it
+# has any challenge identity.
 #
-#   the panel will not drive     drive controls need tier 3, which needs the C3
-#                                code, which needs a challenge identity
-#   the panel rejects flags      session.go: "this car has no challenge identity
-#                                provisioned"
-#   the pivot routine fails      uds.go returns NRC 0x22 rather than hand back an
-#                                empty flag that looks like a solved challenge
+# What is still unavailable there, correctly, is the challenge layer: the pivot
+# routine returns NRC 0x22 and the panel rejects every flag, because there is no
+# identity to award. So ttos-selftest and `ttos-ctf-tool.py walk` cannot accept an
+# unprovisioned car -- and those are the tools that would otherwise tell you the
+# robot is wired right.
 #
-# So a freshly-flashed car with no ttos-provision.conf CANNOT be test-driven
-# through any of its normal interfaces. That is correct behaviour and it is also
-# a terrible way to find out whether you soldered the motor connectors on the
-# right way round.
+# This script fills that gap, and covers three things the panel cannot:
 #
-# This script goes underneath all of it and talks to the nodes directly, which
-# works because an unprovisioned motor node is PERMISSIVE: it has no Data ID, so
-# it accepts any frame on its ID including the 6-byte legacy form
-# (TinytrekLMotor.ino: `bool accept = true; if (haveDataId) {...}`).
+#   ONE WHEEL AT A TIME    a swapped pair of motor-node CAN connectors is
+#                          invisible if you command both wheels together, which
+#                          is what every panel control does
+#   BUS-LEVEL EVIDENCE     controller error states, and whether the BMS is
+#                          actually talking, rather than "the car did not move"
+#   NO BROWSER, NO AP      runs over SSH or the serial console, so you are not
+#                          rejoining a different WiFi network for each of eight
+#                          cars
+#
+# It talks to the nodes directly, which works because an unprovisioned motor node
+# is PERMISSIVE: it has no Data ID, so it accepts any frame on its ID including
+# the 6-byte legacy form (TinytrekLMotor.ino: `bool accept = true; if
+# (haveDataId) {...}`).
 #
 # ONCE A CAR IS PROVISIONED THE NODES GO STRICT and ignore these frames silently
 # -- no error, no reply, nothing. This script detects that and tells you to use
@@ -125,9 +132,12 @@ else
     [ -n "$MISSING" ] && printf '  missing: %s\n' "$MISSING"
     cat <<'EOT'
 
-  That is why the panel will not drive, will not accept a flag, and why the
-  pivot routine fails. Those are gates, not faults. This script talks to the
-  nodes underneath them so you can check the BUILD before you provision.
+  It is in FACTORY/TEST mode: open AP "TTOS-TEST", login ttos/ttos, and the
+  panel's drive controls are OPEN. Flags and the pivot routine will not work --
+  there is no identity to award -- and that is a gate, not a fault.
+
+  This script checks the things the panel cannot: one wheel at a time, so a
+  swapped connector cannot hide, plus bus-level evidence.
 EOT
 fi
 

@@ -105,6 +105,7 @@ func main() {
 	// ---- CTF service layer -------------------------------------------------
 	// Bus ROLE NAMES, not numbers: DRIVE=candrive (motors, BMS), DIAG=candiag (side tap).
 	if *ctfEnable {
+		loadFactoryMode()
 		loadIdentity(*ctfIdentPath)
 
 		// The one DRIVE-bus socket. Everything that writes to the drive bus goes
@@ -181,6 +182,10 @@ func main() {
 			"ifaces": ifaces, "frames": visible,
 			"car": carInfo(), "repeatMs": repeatMs,
 			"tier": tier,
+			// So the panel can say out loud that this car is unprovisioned and
+			// wide open. A car that drives freely LOOKS finished, and that is
+			// exactly the state nobody should mistake for ready.
+			"factory": factoryMode,
 		})
 	})
 	mux.HandleFunc("/api/control", handleControl)
@@ -674,7 +679,15 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 	// Tier gate. "stop" is deliberately ungated: an emergency stop must work from a
 	// locked panel, from a judge's phone, from a session that just expired. A safety
 	// control behind an unlock is not a safety control.
-	if body.Cmd != "stop" && sessionTier(r) < tierC3 {
+	//
+	// FACTORY MODE IS EXEMPT. An unprovisioned car has no C3 code, so no session can
+	// ever reach tier 3 and the pad would be dead forever -- on the one build state
+	// whose entire purpose is hardware testing before an identity exists. There is
+	// no security cost: factory mode already runs an OPEN access point with a
+	// published ttos/ttos login and no challenge to protect. It is not a state any
+	// competition car is ever in, and ttos-provision removes the marker the moment
+	// one is provisioned.
+	if body.Cmd != "stop" && !factoryMode && sessionTier(r) < tierC3 {
 		w.WriteHeader(http.StatusForbidden)
 		writeJSON(w, map[string]any{"ok": false,
 			"msg": "drive controls are locked -- redeem the Challenge 3 code, or your session expired; re-enter your flag"})
