@@ -74,6 +74,17 @@ FD_LENGTHS = (0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64)
 
 B, R, G, Y, X = "\033[1m", "\033[31m", "\033[32m", "\033[33m", "\033[0m"
 
+# --debug prints every raw frame in and out. It is the instrument that answers the
+# one question a silent bus cannot: are the car's replies ARRIVING and being
+# dropped, or not arriving at all? The first is a bug in here; the second is the
+# adapter or the wire. Without it, both look identical -- "no answer".
+DEBUG = False
+
+
+def dbg(msg):
+    if DEBUG:
+        print(f"{Y}[dbg]{X} {msg}", file=sys.stderr)
+
 
 def fd_len(n):
     for q in FD_LENGTHS:
@@ -335,6 +346,12 @@ class PCBUSB(Transport):
     MSG_STANDARD = 0x00
     MSG_FD = 0x04
     MSG_BRS = 0x08
+    # MSGTYPE bits that mean "this is NOT a data frame". A STATUS frame reports a
+    # bus-state change; an ERRFRAME reports a bus error. PCANBasic delivers both
+    # through the same CAN_ReadFD as data, and treating one as a reply is how a
+    # receive loop either returns garbage or -- as the old code did -- gives up.
+    MSG_ERRFRAME = 0x40
+    MSG_STATUS = 0x80
     CHANNELS = {f"PCAN_USBBUS{i}": 0x50 + i for i in range(1, 9)}
 
     class TPCANMsgFD(ctypes.Structure):
@@ -358,6 +375,16 @@ class PCBUSB(Transport):
 
     def __init__(self, channel="PCAN_USBBUS1", bitrate=None):
         self.lib = self._load()
+        # TPCANStatus is a 32-bit UNSIGNED bitfield. ctypes defaults a return to
+        # signed int, so BUSPASSIVE (0x40000) and any high-bit status come back
+        # negative and every `st & MASK` test then works on a sign-extended value.
+        # Pin the return types before the first call.
+        for _fn in ("CAN_InitializeFD", "CAN_ReadFD", "CAN_WriteFD",
+                    "CAN_GetStatus", "CAN_Uninitialize", "CAN_GetErrorText"):
+            try:
+                getattr(self.lib, _fn).restype = ctypes.c_uint32
+            except AttributeError:
+                pass
         self.ch = self.CHANNELS.get(str(channel).upper(),
                                     int(str(channel), 0) if str(channel)[:2].lower() == "0x"
                                     else self.CHANNELS["PCAN_USBBUS1"])
@@ -420,20 +447,35 @@ class PCBUSB(Transport):
         ts = ctypes.c_uint64()
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            m.MSGTYPE = 0
             st = self.lib.CAN_ReadFD(ctypes.c_uint16(self.ch),
-                                     ctypes.byref(m), ctypes.byref(ts))
-            if st & self.ANYBUSERR:
-                # Worth knowing about but not fatal: a lone node on an unterminated
-                # or unpopulated bus reports these constantly. Record the worst seen
-                # so probe can surface it instead of the symptom being "no reply".
-                self.bus_status |= st & self.ANYBUSERR
+                                     ctypes.byref(m), ctypes.byref(ts)) & 0xFFFFFFFF
+
+            # Queue empty is the ONLY status that means "nothing to read". Everything
+            # else may carry a frame alongside it, so it must not end the read.
             if st & self.QRCVEMPTY:
                 time.sleep(0.001)
                 continue
-            if st & ~(self.ANYBUSERR | self.QRCVEMPTY):
-                return None
-            isfd = bool(m.MSGTYPE & self.MSG_FD)
-            n = FD_LENGTHS[m.DLC] if isfd else m.DLC
+
+            # Bus-condition bits are informational -- record them for probe() but do
+            # NOT stop reading. The previous version returned None on any non-empty,
+            # non-buserr status, so a single receive-overrun or status blip on a
+            # busy bus abandoned the wait and the real reply, 2 ms behind it, was
+            # never read. That is the whole "commands work, answers vanish" bug.
+            if st & self.ANYBUSERR:
+                self.bus_status |= st & self.ANYBUSERR
+
+            mtype = m.MSGTYPE
+            if DEBUG:
+                dbg(f"ReadFD st={st:#07x} type={mtype:#04x} "
+                    f"id={m.ID & 0x1FFFFFFF:03X} dlc={m.DLC}")
+
+            # STATUS and ERROR frames are not replies. Skip them and KEEP reading.
+            if mtype & (self.MSG_STATUS | self.MSG_ERRFRAME):
+                continue
+
+            isfd = bool(mtype & self.MSG_FD)
+            n = FD_LENGTHS[m.DLC] if isfd else min(m.DLC, 8)
             return Frame(m.ID & 0x1FFFFFFF, bytes(m.DATA[:n]), fd=isfd)
         return None
 
@@ -473,10 +515,14 @@ class Tester:
 
     def request(self, payload, functional=False, timeout=None, raise_neg=True):
         body, isfd = pack_sf(bytes(payload))
-        self.tp.send(Frame(ID_FUNC if functional else ID_PHYS, body, fd=isfd))
+        req = Frame(ID_FUNC if functional else ID_PHYS, body, fd=isfd)
+        dbg(f"TX {req!r}")
+        self.tp.send(req)
         deadline = time.monotonic() + (timeout or self.timeout)
         while time.monotonic() < deadline:
             f = self.tp.recv(max(0.01, deadline - time.monotonic()))
+            if f:
+                dbg(f"RX {f!r}")
             if not f or f.id != ID_RESP:
                 continue
             resp = unpack_sf(f.data)
@@ -684,35 +730,52 @@ def cmd_walk(args):
         print(f"\n{R}{B}This adapter cannot receive CAN FD. Nothing below will "
               f"return an answer.{X}\n")
 
+    # A no-answer must never be reported as a challenge FAILING. The three "this
+    # should have been refused / it opened" checks below hinge on getting a
+    # NegResp; if the reply simply never arrives (None), the car is not reachable
+    # and the right thing to say is that -- not "the gate is broken", which sent an
+    # operator chasing a firmware ghost once already.
+    def silent():
+        no_answer("the car")
+        note("Stopping the walk -- fix the link, then re-run.")
+        raise SystemExit(1)
+
     # -- C1 ------------------------------------------------------------------
     step("C1.1", "Read the VIN (0xF190, default session)")
     vin = ""
     try:
         t.session(SESSION_DEFAULT)
-        vin = t.read_did(DID_VIN)[3:].decode()
+        r = t.read_did(DID_VIN)
+        if r is None:
+            silent()
+        vin = r[3:].decode(errors="replace")
         ok(f"VIN = {vin}")
-    except (NegResp, TypeError, AttributeError) as e:
+    except NegResp as e:
         bad(f"{e}"); fail.append("C1.1")
 
     step("C1.2", "Run the pivot routine -- the C1 flag is in the response")
     code_c1 = ""
     try:
         r = t.routine(RID_PIVOT, 0x01)
-        # The routine status record is the flag in submission form, FLAG{...}.
-        # 4 + 14 = 18 bytes is not a discrete CAN FD length, so the controller pads
-        # to 20 -- strip that. The payload is self-delimiting, which is why the pad
-        # is unambiguous rather than something to guess at.
+        if r is None:
+            silent()
+        # The routine status record is the flag in submission form, FLAG{...},
+        # padded to a discrete FD length -- strip the trailing zeros.
         code_c1 = r[4:].rstrip(b"\x00").decode(errors="replace")
         ok(f"car pivots, and returns  {B}{code_c1}{X}")
         note("Paste that into the panel to unlock tier 1.")
-    except (NegResp, TypeError) as e:
+    except NegResp as e:
         bad(f"{e}"); fail.append("C1.2")
 
     # -- C2 ------------------------------------------------------------------
     step("C2.1", "The serial (0xF18C) is refused in the default session")
     try:
         t.session(SESSION_DEFAULT)
-        t.read_did(DID_SERIAL)
+        # raise_neg stays on: a refusal RAISES NegResp (the pass case). Only a
+        # POSITIVE reply reaches the next line, and only a None means silence --
+        # which is a dead link, not an open gate.
+        if t.read_did(DID_SERIAL) is None:
+            silent()
         bad("it was NOT refused -- the session gate is not working")
         fail.append("C2.1")
     except NegResp as e:
@@ -852,22 +915,45 @@ def _await_flags(tp, seconds):
     return out
 
 
+def no_answer(what):
+    """One place, one message, no traceback. Every reply in this protocol is a CAN
+    FD frame, so a None here on an adapter that clearly transmits (the car reacts)
+    means the FD reply is not being received. Point there, and offer the tool that
+    proves it."""
+    bad(f"no answer to {what}")
+    note("The request went out -- if the car physically reacts, transmit is fine --")
+    note("but no reply frame came back. Every reply in this game is CAN FD, so this")
+    note("is almost always the adapter not RECEIVING FD frames, not the car.")
+    note("Re-run the same command with --debug to see whether ANY frame arrives:")
+    note("  a 'RX ...' line means it arrived and this tool mishandled it (tell me);")
+    note("  no RX line at all means the adapter/driver is not delivering it.")
+
+
+def need(resp, what):
+    if resp is None:
+        no_answer(what)
+        raise SystemExit(1)
+    return resp
+
+
 def cmd_vin(args):
     t = Tester(open_transport(args))
     t.session(SESSION_DEFAULT)
-    print(t.read_did(DID_VIN)[3:].decode())
+    print(need(t.read_did(DID_VIN), "VIN read (0x22 F190)")[3:].decode(errors="replace"))
 
 
 def cmd_pivot(args):
     t = Tester(open_transport(args))
-    r = t.routine(RID_PIVOT, 0x01 if args.dir == "cw" else 0x02)
-    print(r[4:].decode())
+    r = need(t.routine(RID_PIVOT, 0x01 if args.dir == "cw" else 0x02), "pivot routine (0x31 0201)")
+    # FLAG{...} padded to a discrete FD length -- strip the trailing zeros.
+    print(r[4:].rstrip(b"\x00").decode(errors="replace"))
 
 
 def cmd_snapshot(args):
     t = Tester(open_transport(args))
     t.session(SESSION_EXTENDED)
-    for cid, d in sorted(parse_snapshot(t.read_did(DID_SNAPSHOT)).items()):
+    snap = need(t.read_did(DID_SNAPSHOT), "snapshot read (0x22 F1A0)")
+    for cid, d in sorted(parse_snapshot(snap).items()):
         print(f"{cid:03X}#{d.hex().upper()}")
 
 
@@ -898,6 +984,9 @@ def main():
     ap.add_argument("--iface", default="ttdiag", help="interface for socketcan")
     ap.add_argument("--salt", default=os.environ.get("TTOS_FLEET_SALT", ""),
                     help="fleet salt; also readable from the panel page source")
+    ap.add_argument("--debug", action="store_true",
+                    help="print every frame in and out (and raw PCAN read status); "
+                         "the first thing to reach for when nothing answers")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("probe")
     w = sub.add_parser("walk"); w.add_argument("--car", default="01")
@@ -906,6 +995,8 @@ def main():
     sub.add_parser("snapshot")
     sub.add_parser("monitor")
     args = ap.parse_args()
+    global DEBUG
+    DEBUG = args.debug
     return {"probe": cmd_probe, "walk": cmd_walk, "vin": cmd_vin,
             "pivot": cmd_pivot, "snapshot": cmd_snapshot,
             "monitor": cmd_monitor}[args.cmd](args) or 0
