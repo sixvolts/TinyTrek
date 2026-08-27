@@ -7,7 +7,10 @@ car is genuinely solvable — which is not the same as the test suite passing, b
 the suite drives the Pi's own interfaces and this drives the diagnostic port a
 contestant actually has.
 
-It is also the answer key. Do not leave it on a machine contestants can reach.
+It is also the answer key, live flag codes and all. During an event, it does not go
+on any machine contestants can reach. It is published here because the event it was
+written for is over — if you are running these cars again, regenerate the fleet from
+`provisioning/` first, and treat this file as compromised until you do.
 
 **Companion:** `ARCHITECTURE.md` explains *why* the system is shaped this way.
 This file is *what to do*.

@@ -39,8 +39,22 @@ ttos-provision.conf
 *.swp
 *~
 .DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Staged flash artifacts, if anyone builds them inside the tree rather than
+# ~/ttos-flash. Images are hundreds of MB and do not belong in git.
+*.wic
+*.wic.bz2
+*.wic.bmap
+*.zip
 
 # Staged per-car challenge constants (SECRETS -- Data IDs and C2/C3 codes).
 # build.sh copies provisioning/firmware-constants.h in at flash time.
 /firmware/*/ttos-fleet.h
-__pycache__/
