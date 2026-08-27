@@ -24,7 +24,7 @@ sha512crypt hashes are already in the CSV.
 
 Usage: python3 render-fleet.py [outdir]     (default: this directory)
 """
-import csv, pathlib, sys
+import csv, os, pathlib, sys
 
 # Fleet-wide, NOT secret -- it ships in the dashboard's client JS (brief §5.4).
 # Recorded in OPERATOR-SECRETS.md by the original gen-fleet.py run.
@@ -42,13 +42,13 @@ TXPOWER_MBM = 500
 # every reimage. ttos-provision has always supported TTOS_SSH_AUTHORIZED_KEY; the
 # generator simply never emitted it.
 #
-# Empty string = omit the line entirely.
+# Unset/empty = omit the line entirely, and the rendered conf says so.
 #
-# NOT A SECRET: it is a public key. It does grant console access to whoever holds
-# the matching private key, so the key that ships must belong to a machine that
-# will actually BE at the event.
+# A public key is not a secret, but it does grant console access to whoever holds
+# the matching private half, so the key that ships must belong to a machine that
+# will actually BE at the event -- not to the build host, which stays home.
 #
-# THIS IS SET EXPLICITLY AND HAS NO FALLBACK, deliberately. It used to read
+# THERE IS NO FILESYSTEM FALLBACK, deliberately. This used to read
 #
 #     OPERATOR_SSH_KEY = ""
 #     if not OPERATOR_SSH_KEY and _KEY_PATH.exists():
@@ -56,16 +56,12 @@ TXPOWER_MBM = 500
 #
 # which made the documented "empty = omit" unreachable: blanking the constant
 # silently reloaded the BUILD HOST's key from ~/.ssh/id_ed25519.pub, and eight
-# competition cars were rendered carrying arcana's key without anyone choosing
-# that. Whoever's key ships is now a visible edit to this line, and blanking it
-# does what it says.
+# competition cars were rendered carrying it without anyone choosing that.
+# Reading one named environment variable and nothing else keeps that honest --
+# whoever's key ships is whoever ran the command, and unset does what it says.
 #
-# The key must belong to a machine that will be at the event.
-OPERATOR_SSH_KEY = (
-    "ssh-ed25519 "
-    "<operator-public-key> "
-    "operator@laptop"
-)
+#     TTOS_OPERATOR_SSH_KEY="$(cat ~/.ssh/id_ed25519.pub)" ./render-fleet.py out/
+OPERATOR_SSH_KEY = os.environ.get("TTOS_OPERATOR_SSH_KEY", "").strip()
 
 
 
@@ -127,6 +123,15 @@ def main(outdir):
         (flash / "ttos-provision.conf").write_text(car_conf(r))
     print(f"Rendered {len(rows)} car configs in {outdir}")
     print(f"  fleet salt: {FLEET_SALT}  (deterministic -- no values were generated)")
+    if OPERATOR_SSH_KEY:
+        print(f"  operator key: {OPERATOR_SSH_KEY.split()[-1]}  (from TTOS_OPERATOR_SSH_KEY)")
+    else:
+        # Loud, because the failure lands hours later as "the bench can't reach
+        # any car" and looks like a network fault.
+        print("  operator key: NONE -- TTOS_OPERATOR_SSH_KEY is unset.")
+        print("    These cars will accept console-password SSH only; bench scripts")
+        print("    using BatchMode=yes cannot reach them. Re-render with the key set")
+        print("    if that is not what you want.")
 
 
 if __name__ == "__main__":

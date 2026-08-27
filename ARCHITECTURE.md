@@ -576,10 +576,18 @@ flashing.
 It also emits `TTOS_SSH_AUTHORIZED_KEY`. A fresh card wipes the rootfs and with it
 any key installed by hand on the previous one, and every bench script uses
 `ssh -o BatchMode=yes` — so without this a reflashed car is unreachable to the whole
-harness until someone copies a key over, eight times, after every reimage. When no
-key is configured the generator writes a comment saying so rather than silently
-omitting the line: an event car should not carry a build machine's key, and that
-needs to be a visible decision rather than an accident.
+harness until someone copies a key over, eight times, after every reimage. The key
+comes from `TTOS_OPERATOR_SSH_KEY` in the render environment and from nowhere else:
+
+```sh
+TTOS_OPERATOR_SSH_KEY="$(cat ~/.ssh/id_ed25519.pub)" ./render-fleet.py out/
+```
+
+When it is unset the generator writes a comment into the conf saying so, and says
+it again on stdout, rather than silently omitting the line. An event car should
+carry the key of a machine that will actually be at the event and not the build
+host's, and there is deliberately no filesystem fallback that could pick the
+wrong one — whoever's key ships is whoever ran the command.
 
 ---
 
