@@ -19,10 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This license covers the original work in this repository. It does NOT cover the
-third-party components vendored into the tree, which keep their own licenses --
-including LGPL-licensed Arduino libraries under firmware/ and an OFL-licensed
-font under the dashboard's web assets. See THIRD-PARTY.md for the inventory.

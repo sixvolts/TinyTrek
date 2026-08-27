@@ -1,9 +1,11 @@
 # Third-party components
 
-The repository's own code is MIT (see [LICENSE](LICENSE)). Several third-party
-components are **vendored** into the tree — copied in rather than pulled by a
-package manager — and each keeps its own license. They are listed here so the
-MIT file at the root is not mistaken for a blanket claim over the whole tree.
+The MIT license at the root covers the original work in this repository. It does
+**not** cover the third-party components vendored into the tree — copied in
+rather than pulled by a package manager — which each keep their own license,
+including LGPL-licensed Arduino libraries under `firmware/` and an OFL-licensed
+font in the dashboard's web assets. They are listed here so [LICENSE](LICENSE)
+is not mistaken for a blanket claim over the whole tree.
 
 Nothing here is modified from upstream unless the notes say so.
 
