@@ -38,6 +38,7 @@ ttos-provision.conf
 # Editor / OS cruft
 *.swp
 *~
+~$*
 .DS_Store
 .idea/
 .vscode/
