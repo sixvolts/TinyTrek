@@ -66,6 +66,7 @@ ttos-ctf/
     recipes-support/      ttos-selftest, ttos-bringup, operator tooling
     recipes-core/         image definitions, systemd units, network config
     recipes-kernel/       CAN kconfig, mcp251xfd
+  hardware/               build it yourself — BOM, board fab files, 3D models, schematics, build guide
   firmware/               Arduino sketches for the two motor nodes and the BMS
   bench/                  bench rig control, vehicle emulator, test suite
   tools/                  operator tooling

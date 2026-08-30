@@ -1,0 +1,14 @@
+MOTOR CONTROL BOARD,,x2 per car,,,,,,,,
+,,,,,,,,,,
+Reference Designators,Quantity,Description,Package,Value,Manufacturer,Manufacturer Part Number,Vendor,URL,Digikey Part Number,Mouser Part Number
+,1,Board,Board,,JLC/Custom,,,,,
+A1,1,QT Py SAMD21 Dev Board with STEMMA QT (Adafruit),,,Adafruit,4600,Adafruit,http://adafru.it/4600,,
+A2,1,CAN Bus BFF Add-on for QT-PY (Adafruit),,,Adafruit,5877,Adafruit,http://adafru.it/5877,,
+A3,1,A4988 Stepper Motor Driver Carrier (Pololu),,,Pololu,2128,Pololu,http://adafru.it/2128,,
+C1,1,100 uF Electrolytic Capacitor,CAPPRD350W60D800H1150,100uF 35V Electrolytic Radial,Panasonic,EEU-FC1V101,Digikey/Mouser,,P10294-ND,667-EEU-FC1V101
+J1,1,1X3-TERM_BLOCK,PHOENIX_1751251,,Phoenix Contact,1751251,Amazon/Any,https://amzn.to/3UfWruj,,
+"J2, J4",2,1X2_TERM_BLOCK,PHOENIX_1751248,,Phoenix Contact,1751248,Amazon/Any,https://amzn.to/4hUBsY3,,
+J3,1,1X4_TERM_BLOCK,PHOENIX_1751264,Term BLK 4POS Side Ent 3.5MM PCB,On Shore Technology inc,OSTTE040104,Digikey/Mouser,,ED2742-ND,
+JP1,1,JST Pigtail,,,Adafruit,4336,Adafruit,http://adafru.it/4336,,
+"(A1), (A2)",4,female Header 1x7,,,Samtec inc,SSA-107-S-T,Digikey,,612-SSA-107-S-T-ND,
+(A3),2,Female Header 1x8,,,Samtec inc,SSA-108-S-T,Digikey,,612-SSA-108-S-T-ND,

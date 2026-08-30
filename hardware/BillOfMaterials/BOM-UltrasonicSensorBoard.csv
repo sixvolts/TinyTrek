@@ -1,0 +1,11 @@
+﻿ULTRASONIC SENSOR BOARD,,,,,,,,
+,,,,,,,,
+Reference Designators,Quantity,Description,Package,Manufacturer,Manufacturer Part Number,Vendor,URL,Digikey Part
+,1,Board,Board,JLC/Custom,,,,
+A1,1,QT Py SAMD21 Dev Board with STEMMA QT (Adafruit),QTPY-TH-ADAFRUIT,Adafruit,4600,Adafruit,http://adafru.it/4600,
+A2,1,CAN Bus BFF Add-on for QT-PY (Adafruit),CAN-BUS_BFF-TH-ADAFRUIT,Adafruit,5877,Adafruit,http://adafru.it/5877,
+"J1, J2",2,1X2_TERM_BLOCK,PHOENIX_1751248,Phoenix Contact,1751248,Amazon,https://amzn.to/4hUBsY3,
+JP1,1,US-100 Ultrasonic Distance Sensor,,Adafruit,4019,Adafruit,http://adafru.it/4019,
+JP2,1,JST Pigtail,,Adafruit,4336,Adafruit,http://adafru.it/4336,
+"(A1), (A2)",4,female Header 1x7,,Samtec inc,SSA-107-S-T,Digikey,,612-SSA-107-S-T-ND
+(JP1),1,female Header 1x5,,Samtec inc,SSA-105-S-T,Digikey,,612-SSA-105-S-T-ND

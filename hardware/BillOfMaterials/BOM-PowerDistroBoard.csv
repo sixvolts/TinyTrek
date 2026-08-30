@@ -1,0 +1,20 @@
+﻿POWER DISTRIBUTION BOARD - BOM,,,,,,,,,,
+,,,,,,,,,,
+Reference Designators,Qty,Description,Package,Value/Notes,Manufacturer,Manufacturer Part Number,Vendor,Source,Digikey Part,Mouser Part
+,1,Board,,,Custom/JLC,,,,,
+A1,1,Feather RP2040 with Can Bus,,,Adafruit,5724,Adafruit,http://adafru.it/5724,,
+C1,1,100 uF Electrolytic Capacitor,CAPPRD350W60D800H1150,100uF 35V Electrolytic Radial,Panasonic,EEU-FC1V101,Digikey,,P10294-ND,667-EEU-FC1V101
+C2,1,Ceramic Capicitor,1206,10uF 25V x5R,Samsung Electro-Mechanics America,CL31A106MAHNNNE,Digikey,,1276-1181-1-ND,80-CL31A106MAHNNNE
+D1,1,Diode,1N4148_DIODE,100V Io/200mA,OnSemi,1N4148,Mouser,,1N4148FS-ND,512-1N4148
+D2,1,Green LED,0805,Generic (Panasonic Default),Generic,,,,,
+"J1, J2, J5",3,1X2_TERM_BLOCK,PHOENIX_1751248,Screw Terminals,Phoenix Contact,1751248,Amazon/Any,https://amzn.to/4hUBsY3,,
+"J3, J4",2,1X3-TERM_BLOCK,PHOENIX_1751251,Screw Terminals,Phoenix Contact,1751251,Amazon/Any,https://amzn.to/3UfWruj,,
+K1,1,RELAY-JQC-3F-T73,JQC-3FT73,Relay for 12V to Motors,Generic,,Amazon,https://amzn.to/4i9zaUK,,
+Q1,1,NFET-BS170,TO-92,Basic N-FET for Relay,OnSemi,BS170,Mouser,,BS170-ND,512-BS170
+R1,1,Resistor,0805,10K,Generic (Panasonic Default),,,,,
+R2,1,Resistor,0805,120K 0.5% 1/4W ,Panasonic Electronic Components,ERJ-PB6D1203V,Digikey,,P21255CT-ND,
+R3,1,Resistor,0805,40.2K 0.5% 1/4W,Panasonic Electronic Components,ERJ-PB6D4022V,Digikey,,P21201CT-ND,
+R4,1,Resistor,0805,470,Generic (Panasonic Default),,,,,
+VR1,1,Voltage Regulator *,MURATA-78S,Murata 7805 Replacement,Murata,OKI-78SR-5/1.5-W36H-C,Mouser,,811-2692-ND,580-OKI78SR51.5W36HC
+(A1),1,Conn rcpt 12POS 0.1 TIN PCB,,,Samtec inc,SSA-112-S-T,Digikey,,612-SSA-112-S-T-ND,
+(A1),1,Conn Rcpt 16 POS 0.1 TIN PCB,,,Samtec inc,SSA-116-S-T,Digikey,,612-SSA-116-S-T-ND,
