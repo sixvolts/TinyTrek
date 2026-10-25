@@ -1,4 +1,4 @@
-TinyTrek
+# TinyTrek
 
 A small autonomous-ish car built to be hacked, and the Yocto Linux distribution, firmware, and hardware
 that runs it. Eight identical vehicles, each a genuine automotive network in
