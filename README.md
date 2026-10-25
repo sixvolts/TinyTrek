@@ -7,7 +7,7 @@ watches the drivetrain, and an operator panel served over the car's own WiFi tha
 starts out locked and opens as you solve it.
 
 <p>
-      <img src="tinytrek-car.png" style="width: 45%; align: text-align: center;"/>
+      <img src="tinytrek-car.png" style="width: 45%; text-align: center;"/>
 </p>
 
 It was built for an authorized, educational capture-the-flag event. The three
