@@ -8,9 +8,9 @@ starts out locked and opens as you solve it.
 
 <p style="text-align: center; width: 100%;"">
       <img src="tinytrek-car.png" style="width: 45%;/>
-            <br/>
+         
 </p>
-
+<br/>
 It was built for an authorized, educational capture-the-flag event. The three
 challenges are the real thing rather than a simulation of one — a UDS diagnostic
 server on CAN FD, an AUTOSAR-style end-to-end CRC protecting the drive bus, and
