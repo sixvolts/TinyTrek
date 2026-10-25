@@ -1,6 +1,6 @@
-# ttos-ctf — TinyTrekOS
+TinyTrek
 
-A small autonomous-ish car built to be hacked, and the Yocto Linux distribution
+A small autonomous-ish car built to be hacked, and the Yocto Linux distribution, firmware, and hardware
 that runs it. Eight identical vehicles, each a genuine automotive network in
 miniature: two CAN buses, three microcontroller nodes, a battery manager that
 watches the drivetrain, and an operator panel served over the car's own WiFi that
