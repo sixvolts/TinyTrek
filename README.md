@@ -6,8 +6,8 @@ miniature: two CAN buses, three microcontroller nodes, a battery manager that
 watches the drivetrain, and an operator panel served over the car's own WiFi that
 starts out locked and opens as you solve it.
 
-<p>
-      <img src="tinytrek-car.png" style="width: 45%; text-align: center;"/>
+<p style="text-align: center;"">
+      <img src="tinytrek-car.png" style="width: 45%;/>
 </p>
 
 It was built for an authorized, educational capture-the-flag event. The three
